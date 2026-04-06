@@ -94,30 +94,27 @@ export default function LeadGenerator() {
       const ai = new GoogleGenAI({ apiKey: currentApiKey });
       
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Encontre 10 estabelecimentos comerciais reais baseados na seguinte busca: "${query}".
-        
-        Para cada estabelecimento, forneça:
-        1. Nome do estabelecimento
-        2. Cidade
-        3. Endereço completo
-        4. Números de telefone (inclua todos os números encontrados, separados por vírgula. Se não encontrar nenhum, retorne uma string vazia)
-        5. Link do Google Maps (se possível, ou o nome exato para busca)
-        6. Nicho de atuação
-        
-        Retorne APENAS um JSON válido no seguinte formato:
-        {
-          "leads": [
-            {
-              "name": "Nome",
-              "city": "Cidade",
-              "address": "Endereço",
-              "phone": "Telefone",
-              "maps_link": "Link do Maps",
-              "niche": "Nicho"
-            }
-          ]
-        }`,
+        model: "gemini-3.1-flash-lite-preview",
+        contents: `Você é um especialista em prospecção. Sua tarefa é encontrar 10 estabelecimentos comerciais REAIS e ATIVOS no Google Maps baseados na busca: "${query}".
+
+IMPORTANTE: 
+- Os dados devem ser REAIS e ATUAIS.
+- Extraia o nome, cidade, endereço completo, telefone e link do Maps.
+- Se não encontrar o telefone, deixe em branco, mas tente ao máximo encontrar dados reais.
+
+Retorne APENAS um JSON válido no seguinte formato:
+{
+  "leads": [
+    {
+      "name": "Nome Real da Empresa",
+      "city": "Cidade",
+      "address": "Endereço Completo, Número - Bairro",
+      "phone": "(00) 00000-0000",
+      "maps_link": "https://www.google.com/maps/search/...",
+      "niche": "Nicho específico"
+    }
+  ]
+}`,
         config: {
           tools: [{ googleSearch: {} }],
           responseMimeType: "application/json",
