@@ -16,10 +16,45 @@ export default function SettingsPage() {
   } | null>(null);
   const [geminiUsage, setGeminiUsage] = useState<{ count: number; limit: number } | null>(null);
 
+  const [isTestingKey, setIsTestingKey] = useState(false);
+  const [testResult, setTestResult] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
   useEffect(() => {
     fetchSettings();
     fetchGeminiUsage();
   }, []);
+
+  const testApiKey = async () => {
+    if (!apiKey) {
+      setTestResult({ type: "error", text: "Insira uma chave para testar." });
+      return;
+    }
+    setIsTestingKey(true);
+    setTestResult(null);
+    try {
+      const genAI = new GoogleGenAI({ apiKey: apiKey.trim() });
+      const response = await genAI.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: "Diga 'OK' se você estiver funcionando.",
+      });
+      if (response.text) {
+        setTestResult({ type: "success", text: "Chave válida! A IA respondeu corretamente." });
+      } else {
+        setTestResult({ type: "error", text: "A IA não retornou uma resposta válida." });
+      }
+    } catch (e: any) {
+      console.error("Error testing API key:", e);
+      let errorMsg = "Erro ao testar a chave.";
+      if (e.message?.includes("429")) {
+        errorMsg = "Limite de cota atingido (Erro 429). Esta chave já excedeu o limite de requisições.";
+      } else if (e.message?.includes("403") || e.message?.includes("API_KEY_INVALID")) {
+        errorMsg = "Chave inválida (Erro 403). Verifique se a chave está correta.";
+      }
+      setTestResult({ type: "error", text: errorMsg });
+    } finally {
+      setIsTestingKey(false);
+    }
+  };
 
   const fetchGeminiUsage = async () => {
     try {
@@ -169,7 +204,7 @@ export default function SettingsPage() {
                 >
                   Chave da API (Gemini API Key)
                 </label>
-                <div className="mt-1">
+                <div className="mt-1 flex gap-2">
                   <input
                     type="password"
                     name="apiKey"
@@ -179,7 +214,23 @@ export default function SettingsPage() {
                     className="shadow-sm focus:ring-emerald-500 focus:border-emerald-500 block w-full sm:text-sm border-zinc-300 rounded-md px-4 py-2 border"
                     placeholder="AIzaSy..."
                   />
+                  <button
+                    type="button"
+                    onClick={testApiKey}
+                    disabled={isTestingKey}
+                    className="inline-flex items-center px-3 py-2 border border-zinc-300 shadow-sm text-sm leading-4 font-medium rounded-md text-zinc-700 bg-white hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 disabled:opacity-50 whitespace-nowrap"
+                  >
+                    {isTestingKey ? "Testando..." : "Testar Chave"}
+                  </button>
                 </div>
+                {testResult && (
+                  <div className={`mt-2 p-2 rounded text-xs flex items-center gap-2 ${
+                    testResult.type === "success" ? "bg-emerald-50 text-emerald-700 border border-emerald-100" : "bg-red-50 text-red-700 border border-red-100"
+                  }`}>
+                    {testResult.type === "success" ? <CheckCircle className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />}
+                    {testResult.text}
+                  </div>
+                )}
                 <p className="mt-2 text-sm text-zinc-500">
                   Você pode gerar uma chave gratuitamente no{" "}
                   <a

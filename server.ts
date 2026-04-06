@@ -291,6 +291,9 @@ app.post('/api/settings', authenticateToken, async (req: any, res) => {
     // Admin logic
     if (gemini_api_key !== undefined) {
       await db.sql`INSERT INTO settings (key, value) VALUES ('gemini_api_key', ${gemini_api_key}) ON CONFLICT(key) DO UPDATE SET value = excluded.value`;
+      // Also update admin's personal key to keep it in sync or clear it
+      await db.sql`UPDATE users SET gemini_api_key = ${gemini_api_key} WHERE id = ${req.user.id}`;
+      
       // Reset usage when key changes
       const today = new Date().toISOString().split('T')[0];
       await db.sql`INSERT INTO settings (key, value) VALUES ('gemini_usage_date', ${today}) ON CONFLICT(key) DO UPDATE SET value = excluded.value`;
