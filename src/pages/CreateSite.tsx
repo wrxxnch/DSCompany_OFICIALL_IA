@@ -170,11 +170,10 @@ export default function CreateSite() {
         console.error("Error fetching settings:", e);
       }
 
-      if (!apiKey && user?.role === 'admin') {
+      if (!apiKey) {
         // Fallback to environment variable
         apiKey =
           import.meta.env.VITE_GEMINI_API_KEY ||
-          (process.env as any).GEMINI_API_KEY ||
           "";
         if (apiKey) {
           addLog("Chave da API obtida das variáveis de ambiente.", "success");
@@ -271,8 +270,7 @@ RETORNE APENAS UM JSON VÁLIDO com a seguinte estrutura exata (sem formatação 
 
 NÃO INVENTE DADOS. Se não souber ou não encontrar o local exato, retorne success: false.`,
           config: {
-            // Removido o uso de tools (googleMaps/googleSearch) pois causa erro 429 em contas gratuitas.
-            // A IA consegue extrair os dados diretamente da URL expandida.
+            tools: [{ googleMaps: {} }],
           },
         });
 
@@ -507,7 +505,7 @@ NÃO INVENTE DADOS. Se não souber ou não encontrar o local exato, retorne succ
         friendlyError.includes("quota")
       ) {
         friendlyError =
-          'Limite de cota atingido (Erro 429). A ferramenta do Google Maps no Gemini tem limites diários. IMPORTANTE: Se você trocou a chave no Render, lembre-se de atualizá-la também no menu "Configurações" deste painel, pois a chave salva lá tem prioridade.';
+          'Limite de cota do Google atingido (Erro 429). O Google limita buscas reais (Google Search/Maps) em chaves gratuitas. Tente novamente em 1 minuto ou use uma chave com faturamento ativado no Google Cloud.';
       } else if (
         friendlyError.includes("503") ||
         friendlyError.includes("UNAVAILABLE") ||

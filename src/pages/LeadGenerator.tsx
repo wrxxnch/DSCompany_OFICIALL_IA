@@ -82,7 +82,20 @@ export default function LeadGenerator() {
     setLeads([]);
 
     try {
-      let currentApiKey = apiKey;
+      // Fetch latest API key directly to ensure we use the one just saved
+      let currentApiKey = "";
+      try {
+        const res = await fetch("/api/settings", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          currentApiKey = data.gemini_api_key?.trim() || "";
+        }
+      } catch (err) {
+        console.error("Error fetching latest API key:", err);
+      }
+
       if (!currentApiKey) {
         currentApiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
       }
@@ -116,7 +129,7 @@ Retorne APENAS um JSON válido no seguinte formato:
   ]
 }`,
         config: {
-          tools: [{ googleSearch: {} }],
+          tools: [{ googleMaps: {} }],
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
@@ -191,9 +204,9 @@ Retorne APENAS um JSON válido no seguinte formato:
       let friendlyError = err.message || "Erro ao realizar busca com IA.";
       
       if (friendlyError.includes("429") || friendlyError.includes("RESOURCE_EXHAUSTED")) {
-        friendlyError = "Limite de cota atingido (Erro 429). Se você estiver usando uma chave gratuita, o Google limita a quantidade de buscas por minuto. Tente novamente em alguns instantes ou configure uma nova chave em 'Configurações'.";
+        friendlyError = "Limite de cota do Google atingido (Erro 429). O Google limita buscas reais (Google Search/Maps) em chaves gratuitas. Tente novamente em 1 minuto ou use uma chave com faturamento ativado no Google Cloud.";
       } else if (friendlyError.includes("API_KEY_INVALID")) {
-        friendlyError = "Chave de API inválida. Verifique se a chave em 'Configurações' está correta.";
+        friendlyError = "Chave de API inválida. Verifique se a chave em 'Configurações' está correta e ativa.";
       }
       
       setError(friendlyError);
