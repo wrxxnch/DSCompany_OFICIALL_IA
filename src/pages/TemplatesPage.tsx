@@ -476,6 +476,13 @@ Retorne APENAS o JSON puro.`,
                 </div>
                 <h3 className="text-lg font-bold text-zinc-900 mb-2">{template.name}</h3>
                 <p className="text-xs text-zinc-500 mb-4">Criado em: {new Date(template.created_at).toLocaleDateString()}</p>
+                <button
+                  type="button"
+                  onClick={() => navigate('/create', { state: { templateId: template.id } })}
+                  className="mb-4 inline-flex items-center rounded-lg bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100"
+                >
+                  Usar este template
+                </button>
                 <div className="space-y-2">
                   <div className="flex items-center text-xs text-zinc-600">
                     <Sparkles className="w-3 h-3 mr-1 text-amber-500" />

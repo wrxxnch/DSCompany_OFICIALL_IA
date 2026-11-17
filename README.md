@@ -18,3 +18,9 @@ View your app in AI Studio: https://ai.studio/apps/9cef1194-e9ea-48a7-a550-b7f6e
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
+
+## Public panel and n8n
+
+This branch removes the sign-in screen and runs the app in public mode. Every API route and administrative action is reachable without authentication. Review [SECURITY_PUBLIC_MODE.md](./SECURITY_PUBLIC_MODE.md) before deploying; do not use public mode with production data or secrets.
+
+The importable workflow and setup instructions are in [n8n/README.md](./n8n/README.md). It searches Google Places by company name and location, optionally enriches a user-supplied Instagram professional username through Meta's official API, then returns a prompt or generated HTML.

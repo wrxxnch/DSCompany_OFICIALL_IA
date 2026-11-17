@@ -49,64 +49,28 @@ initAdmin();
 
 // --- API Routes ---
 
-// Auth Middleware
-const authenticateToken = (req: any, res: any, next: any) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-
-  if (token == null) return res.sendStatus(401);
-
-  jwt.verify(token, JWT_SECRET, async (err: any, user: any) => {
-    if (err) return res.sendStatus(403);
-    
-    try {
-      // Check cache first
-      const cached = userCache.get(user.id);
-      const now = Date.now();
-      if (cached && (now - cached.timestamp < USER_CACHE_TTL)) {
-        if (!cached.exists) {
-          return res.status(401).json({ error: 'Usuário não encontrado ou sessão expirada. Por favor, faça login novamente.' });
-        }
-        req.user = { ...user, role: cached.role, sector: cached.sector };
-        return next();
-      }
-
-      // Verify user still exists in DB and get current role/sector
-      const results = await db.sql`SELECT id, role, sector FROM users WHERE id = ${user.id}`;
-      const dbUser = results[0];
-      
-      userCache.set(user.id, { timestamp: now, exists: !!dbUser, role: dbUser?.role, sector: dbUser?.sector });
-
-      if (!dbUser) {
-        return res.status(401).json({ error: 'Usuário não encontrado ou sessão expirada. Por favor, faça login novamente.' });
-      }
-      
-      req.user = { ...user, role: dbUser.role, sector: dbUser.sector };
-      next();
-    } catch (dbErr: any) {
-      console.error('Auth middleware DB error:', dbErr);
-      return res.sendStatus(500);
+// PUBLIC MODE: all routes using this middleware are open to anyone who can reach the app.
+// This intentionally replaces JWT checks at the user's request; do not deploy with private data.
+const authenticateToken = async (req: any, res: any, next: any) => {
+  try {
+    let results = await db.sql`SELECT id, username, role, api_key, daily_goal, sector, gemini_api_key, sales_message_template, can_use_ai_search FROM users WHERE LOWER(username) = LOWER('DuJao') LIMIT 1`;
+    if (!results[0]) {
+      await initAdmin();
+      results = await db.sql`SELECT id, username, role, api_key, daily_goal, sector, gemini_api_key, sales_message_template, can_use_ai_search FROM users WHERE LOWER(username) = LOWER('DuJao') LIMIT 1`;
     }
-  });
+    const publicUser = results[0];
+    if (!publicUser) return res.status(503).json({ error: 'Usuário operacional padrão ainda não foi inicializado.' });
+    req.user = { ...publicUser, role: 'admin', sector: publicUser.sector || 'Produção' };
+    return next();
+  } catch (error) {
+    console.error('Public access middleware error:', error);
+    return res.status(500).json({ error: 'Erro ao inicializar acesso público' });
+  }
 };
 
-// Login
-app.post('/api/auth/login', async (req, res) => {
-  try {
-    const { username, password } = req.body;
-    const results = await db.sql`SELECT * FROM users WHERE LOWER(username) = LOWER(${username})`;
-    const user = results[0];
-
-    if (!user || !bcrypt.compareSync(password, user.password_hash)) {
-      return res.status(401).json({ error: 'Credenciais inválidas' });
-    }
-
-    const token = jwt.sign({ id: user.id, username: user.username, role: user.role, sector: user.sector }, JWT_SECRET, { expiresIn: '24h' });
-    res.json({ token, user: { id: user.id, username: user.username, role: user.role, api_key: user.api_key, sector: user.sector } });
-  } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ error: 'Erro interno no servidor' });
-  }
+// Login is intentionally disabled while this instance runs in public mode.
+app.post('/api/auth/login', (_req, res) => {
+  res.status(410).json({ error: 'Login desativado: o painel está configurado para acesso público.' });
 });
 
 // Change password
@@ -768,41 +732,9 @@ app.post('/api/proxy-webhook', authenticateToken, async (req: any, res: any) => 
 });
 
 // Analyze Link Endpoint
-app.post('/api/analyze-link', async (req: any, res: any) => {
-  // Check for authorization (either JWT or a simple API key passed in headers)
-  const authHeader = req.headers['authorization'];
-  const apiKeyHeader = req.headers['x-api-key'];
-  
-  let isAuthenticated = false;
-  let requestUser: any = null;
-  
-  if (apiKeyHeader) {
-     // Check if it matches a user's API key
-     const results = await db.sql`SELECT id, role, gemini_api_key FROM users WHERE api_key = ${apiKeyHeader}`;
-     const user = results[0];
-     if (user) {
-       isAuthenticated = true;
-       requestUser = user;
-     }
-  } else if (authHeader) {
-     const token = authHeader.split(' ')[1];
-     try {
-       const decoded: any = jwt.verify(token, JWT_SECRET);
-       const results = await db.sql`SELECT id, role, gemini_api_key FROM users WHERE id = ${decoded.id}`;
-       const user = results[0];
-       if (user) {
-         isAuthenticated = true;
-         requestUser = user;
-       }
-     } catch (e) {
-       // ignore
-     }
-  }
-
-  if (!isAuthenticated) {
-    return res.status(401).json({ error: 'Não autorizado. Forneça um token JWT válido ou um x-api-key configurado.' });
-  }
-
+app.post('/api/analyze-link', authenticateToken, async (req: any, res: any) => {
+  // This endpoint is public in the explicitly selected public-panel mode.
+  const requestUser = req.user;
   const { url } = req.body;
   if (!url) {
     return res.status(400).json({ error: 'A URL é obrigatória no corpo da requisição ({"url": "..."}).' });

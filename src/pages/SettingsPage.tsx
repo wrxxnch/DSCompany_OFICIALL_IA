@@ -78,7 +78,6 @@ export default function SettingsPage() {
       });
       if (res.status === 401 || res.status === 403) {
         logout();
-        navigate("/login");
         return;
       }
       if (res.ok) {
@@ -119,7 +118,6 @@ export default function SettingsPage() {
 
       if (res.status === 401 || res.status === 403) {
         logout();
-        navigate("/login");
         return;
       }
 

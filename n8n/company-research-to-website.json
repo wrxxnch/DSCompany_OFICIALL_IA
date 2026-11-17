@@ -1,0 +1,204 @@
+{
+  "name": "DS Company - Empresa para site ou prompt",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "dscompany-company-to-site",
+        "responseMode": "usingRespondToWebhook",
+        "options": {}
+      },
+      "id": "ceadbe2f-b086-41d6-98c3-1f4f95b85101",
+      "name": "Webhook - Nova pesquisa",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-880, 100],
+      "webhookId": "dscompany-company-to-site"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://places.googleapis.com/v1/places:searchText",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-Goog-Api-Key", "value": "={{$env.GOOGLE_MAPS_API_KEY}}" },
+            { "name": "X-Goog-FieldMask", "value": "places.id,places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.websiteUri,places.rating,places.userRatingCount,places.googleMapsUri,places.types,places.editorialSummary,places.regularOpeningHours" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { textQuery: $('Webhook - Nova pesquisa').first().json.body.companyName + ( $('Webhook - Nova pesquisa').first().json.body.location ? ', ' + $('Webhook - Nova pesquisa').first().json.body.location : '' ), languageCode: $('Webhook - Nova pesquisa').first().json.body.languageCode || 'pt-BR', maxResultCount: 5 } }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "ceadbe2f-b086-41d6-98c3-1f4f95b85102",
+      "name": "Google Places - Buscar empresa",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-640, 100]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            {
+              "id": "instagram-username-present",
+              "leftValue": "={{ $('Webhook - Nova pesquisa').first().json.body.instagramUsername || '' }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ceadbe2f-b086-41d6-98c3-1f4f95b85103",
+      "name": "Instagram informado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-400, 100]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://graph.facebook.com/' + $env.META_GRAPH_VERSION + '/' + $env.META_IG_USER_ID }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "fields",
+              "value": "={{ 'business_discovery.username(' + $('Webhook - Nova pesquisa').first().json.body.instagramUsername.replace(/^@/, '') + '){username,name,biography,website,followers_count,media_count}' }}"
+            },
+            { "name": "access_token", "value": "={{$env.META_ACCESS_TOKEN}}" }
+          ]
+        },
+        "options": { "timeout": 30000 }
+      },
+      "id": "ceadbe2f-b086-41d6-98c3-1f4f95b85104",
+      "name": "Instagram Graph - Business Discovery",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-160, 0],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { instagram: null } }];"
+      },
+      "id": "ceadbe2f-b086-41d6-98c3-1f4f95b85105",
+      "name": "Instagram não informado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-160, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('Webhook - Nova pesquisa').first().json.body || {};\nconst placesResponse = $('Google Places - Buscar empresa').first().json || {};\nconst place = (placesResponse.places || [])[0];\nif (!input.companyName || !String(input.companyName).trim()) throw new Error('Informe companyName no corpo do webhook.');\nif (!place) throw new Error('Nenhum estabelecimento foi encontrado no Google Places. Tente informar cidade/estado em location.');\nconst rawInstagram = $input.first()?.json || {};\nconst discovery = rawInstagram.business_discovery || null;\nconst name = place.displayName?.text || input.companyName;\nconst company = { name, address: place.formattedAddress || '', phone: place.nationalPhoneNumber || '', website: place.websiteUri || '', rating: place.rating ?? null, reviewCount: place.userRatingCount ?? null, googleMapsUrl: place.googleMapsUri || '', categories: place.types || [], description: place.editorialSummary?.text || '', hours: place.regularOpeningHours?.weekdayDescriptions || [] };\nconst instagramUsername = String(input.instagramUsername || '').replace(/^@/, '');\nconst instagramUrl = instagramUsername ? 'https://www.instagram.com/' + encodeURIComponent(instagramUsername) + '/' : '';\nconst template = String(input.templatePrompt || 'Crie uma landing page profissional, mobile-first e acessível para a empresa abaixo. Use somente os dados fornecidos; não invente depoimentos, preços ou serviços. Retorne exclusivamente um documento HTML completo com CSS incluído.');\nconst replacements = { name: company.name, address: company.address, phone: company.phone, website: company.website, description: company.description, city: input.location || '', services: company.categories.join(', '), mapLink: company.googleMapsUrl, instagram: instagramUrl, rating: company.rating == null ? '' : String(company.rating), reviewCount: company.reviewCount == null ? '' : String(company.reviewCount) };\nlet prompt = template;\nfor (const [key, value] of Object.entries(replacements)) { prompt = prompt.replaceAll('${data.' + key + '}', String(value)).replaceAll('{{' + key + '}}', String(value)); }\nprompt += '\\n\\nDados verificados do Google Maps (use sem inventar):\\n' + JSON.stringify(company, null, 2);\nif (discovery) prompt += '\\n\\nDados públicos retornados pelo Instagram Business Discovery: ' + JSON.stringify(discovery);\nif (instagramUrl) prompt += '\\nPerfil Instagram informado: ' + instagramUrl + (discovery ? '' : ' (não foi possível obter dados via API oficial; mantenha apenas o link).');\nreturn [{ json: { mode: input.mode === 'site' ? 'site' : 'prompt', siteName: name, company, instagram: discovery, instagramUrl, prompt } }];"
+      },
+      "id": "ceadbe2f-b086-41d6-98c3-1f4f95b85106",
+      "name": "Montar dados e prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [80, 100]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            {
+              "id": "create-site-mode",
+              "leftValue": "={{$json.mode}}",
+              "rightValue": "site",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ceadbe2f-b086-41d6-98c3-1f4f95b85107",
+      "name": "Gerar HTML ou somente prompt?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [320, 100]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "x-goog-api-key", "value": "={{$env.GEMINI_API_KEY}}" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { contents: [{ parts: [{ text: $json.prompt }] }], generationConfig: { temperature: 0.6, maxOutputTokens: 8192 } } }}",
+        "options": { "timeout": 120000 }
+      },
+      "id": "ceadbe2f-b086-41d6-98c3-1f4f95b85108",
+      "name": "Gemini - Gerar HTML",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [560, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json || {};\nconst source = $('Montar dados e prompt').first().json;\nconst html = response.candidates?.[0]?.content?.parts?.map(part => part.text || '').join('') || '';\nif (!html) throw new Error('Gemini não retornou HTML. Verifique a chave e o limite da API.');\nreturn [{ json: { mode: 'site', siteName: source.siteName, company: source.company, instagram: source.instagram, instagramUrl: source.instagramUrl, html } }];"
+      },
+      "id": "ceadbe2f-b086-41d6-98c3-1f4f95b85109",
+      "name": "Preparar resposta com HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { mode: 'site', siteName: $json.siteName, company: $json.company, instagram: $json.instagram, instagramUrl: $json.instagramUrl, html: $json.html } }}",
+        "options": { "responseCode": 200 }
+      },
+      "id": "ceadbe2f-b086-41d6-98c3-1f4f95b85110",
+      "name": "Responder com site HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [1040, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { mode: 'prompt', siteName: $json.siteName, company: $json.company, instagram: $json.instagram, instagramUrl: $json.instagramUrl, prompt: $json.prompt } }}",
+        "options": { "responseCode": 200 }
+      },
+      "id": "ceadbe2f-b086-41d6-98c3-1f4f95b85111",
+      "name": "Responder somente com prompt",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [560, 200]
+    }
+  ],
+  "connections": {
+    "Webhook - Nova pesquisa": { "main": [[{ "node": "Google Places - Buscar empresa", "type": "main", "index": 0 }]] },
+    "Google Places - Buscar empresa": { "main": [[{ "node": "Instagram informado?", "type": "main", "index": 0 }]] },
+    "Instagram informado?": {
+      "main": [
+        [{ "node": "Instagram Graph - Business Discovery", "type": "main", "index": 0 }],
+        [{ "node": "Instagram não informado", "type": "main", "index": 0 }]
+      ]
+    },
+    "Instagram Graph - Business Discovery": { "main": [[{ "node": "Montar dados e prompt", "type": "main", "index": 0 }]] },
+    "Instagram não informado": { "main": [[{ "node": "Montar dados e prompt", "type": "main", "index": 0 }]] },
+    "Montar dados e prompt": { "main": [[{ "node": "Gerar HTML ou somente prompt?", "type": "main", "index": 0 }]] },
+    "Gerar HTML ou somente prompt?": {
+      "main": [
+        [{ "node": "Gemini - Gerar HTML", "type": "main", "index": 0 }],
+        [{ "node": "Responder somente com prompt", "type": "main", "index": 0 }]
+      ]
+    },
+    "Gemini - Gerar HTML": { "main": [[{ "node": "Preparar resposta com HTML", "type": "main", "index": 0 }]] },
+    "Preparar resposta com HTML": { "main": [[{ "node": "Responder com site HTML", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1", "saveManualExecutions": true },
+  "versionId": "ceadbe2f-b086-41d6-98c3-1f4f95b85199",
+  "meta": { "templateCredsSetupCompleted": false },
+  "tags": []
+}

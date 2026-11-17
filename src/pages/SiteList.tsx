@@ -94,7 +94,6 @@ export default function SiteList() {
       });
       if (res.status === 401 || res.status === 403) {
         logout();
-        navigate("/login");
         return;
       }
       if (!res.ok) {
@@ -176,7 +175,6 @@ export default function SiteList() {
       });
       if (res.status === 401 || res.status === 403) {
         logout();
-        navigate("/login");
         return;
       }
       setDeleteModal({ isOpen: false, id: null });
@@ -194,7 +192,6 @@ export default function SiteList() {
       });
       if (res.status === 401 || res.status === 403) {
         logout();
-        navigate("/login");
         return;
       }
       if (!res.ok) throw new Error("Falha ao baixar arquivo");
@@ -225,7 +222,6 @@ export default function SiteList() {
       });
       if (res.status === 401 || res.status === 403) {
         logout();
-        navigate("/login");
         return;
       }
       if (!res.ok) throw new Error("Falha ao obter JSON");
@@ -259,7 +255,6 @@ export default function SiteList() {
 
       if (res.status === 401 || res.status === 403) {
         logout();
-        navigate("/login");
         return;
       }
 
@@ -384,7 +379,6 @@ export default function SiteList() {
       );
       if (res.status === 401 || res.status === 403) {
         logout();
-        navigate("/login");
         return;
       }
       if (!res.ok) throw new Error("Falha ao obter JSON da análise");
@@ -458,7 +452,6 @@ export default function SiteList() {
 
       if (endpointRes.status === 401 || endpointRes.status === 403) {
         logout();
-        navigate("/login");
         return;
       }
 

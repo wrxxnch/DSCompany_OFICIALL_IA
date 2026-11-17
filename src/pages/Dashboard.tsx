@@ -127,7 +127,6 @@ export default function Dashboard() {
           sitesRes.status === 403
         ) {
           logout();
-          navigate("/login");
           return;
         }
 

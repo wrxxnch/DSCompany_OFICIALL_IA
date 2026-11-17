@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import {
   Sparkles,
@@ -17,6 +17,7 @@ import { generatePrompt, generateFlowJson, fillTemplate } from "../utils/flowGen
 export default function CreateSite() {
   const { token, logout, user } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
     if (user && user.role !== "admin" && user.sector !== "Prospecção") {
@@ -103,7 +104,9 @@ export default function CreateSite() {
         const data = await res.json();
         setTemplates(data);
         if (data.length > 0) {
-          setSelectedTemplateId(data[0].id.toString());
+          const requestedTemplateId = location.state?.templateId;
+          const selected = data.find((template: any) => String(template.id) === String(requestedTemplateId));
+          setSelectedTemplateId(String(selected?.id ?? data[0].id));
         }
       }
     } catch (err) {
@@ -152,7 +155,6 @@ export default function CreateSite() {
 
         if (settingsRes.status === 401 || settingsRes.status === 403) {
           logout();
-          navigate("/login");
           throw new Error("Sessão expirada. Por favor, faça login novamente.");
         }
 
@@ -209,7 +211,6 @@ export default function CreateSite() {
 
             if (expandRes.status === 401 || expandRes.status === 403) {
               logout();
-              navigate("/login");
               throw new Error("Sessão expirada. Por favor, faça login novamente.");
             }
 
@@ -371,7 +372,6 @@ NÃO INVENTE DADOS. Se não souber ou não encontrar o local exato, retorne succ
         addLog("Erro ao salvar dados no banco.", "error");
         if (saveRes.status === 401 || saveRes.status === 403) {
           logout();
-          navigate("/login");
           throw new Error(
             "Sessão expirada. Por favor, faça login novamente.",
           );
@@ -428,7 +428,6 @@ NÃO INVENTE DADOS. Se não souber ou não encontrar o local exato, retorne succ
 
           if (endpointRes.status === 401 || endpointRes.status === 403) {
             logout();
-            navigate("/login");
             throw new Error(
               "Sessão expirada. Por favor, faça login novamente.",
             );
@@ -549,7 +548,6 @@ NÃO INVENTE DADOS. Se não souber ou não encontrar o local exato, retorne succ
 
         if (res.status === 401 || res.status === 403) {
           logout();
-          navigate("/login");
           return;
         }
         if (!res.ok) throw new Error("Falha ao baixar arquivo");

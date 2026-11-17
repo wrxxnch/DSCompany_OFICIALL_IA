@@ -1,7 +1,6 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import Login from './pages/Login';
 import DashboardLayout from './layouts/DashboardLayout';
 import Dashboard from './pages/Dashboard';
 import CreateSite from './pages/CreateSite';
@@ -14,37 +13,37 @@ import ProfilePage from './pages/ProfilePage';
 import LeadGenerator from './pages/LeadGenerator';
 import SearchHistory from './pages/SearchHistory';
 
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { user, isLoading } = useAuth();
-  if (isLoading) return <div className="min-h-screen flex items-center justify-center">Carregando...</div>;
-  if (!user) return <Navigate to="/login" replace />;
-  return <>{children}</>;
+function PublicApplication() {
+  const { isLoading } = useAuth();
+  if (isLoading) {
+    return <div className="min-h-screen flex items-center justify-center text-sm text-zinc-500">Carregando painel…</div>;
+  }
+
+  return (
+    <Routes>
+      <Route path="/" element={<DashboardLayout />}>
+        <Route index element={<Dashboard />} />
+        <Route path="create" element={<CreateSite />} />
+        <Route path="sites" element={<SiteList />} />
+        <Route path="settings" element={<SettingsPage />} />
+        <Route path="api-docs" element={<ApiDocs />} />
+        <Route path="users" element={<UsersPage />} />
+        <Route path="templates" element={<TemplatesPage />} />
+        <Route path="profile" element={<ProfilePage />} />
+        <Route path="leads" element={<LeadGenerator />} />
+        <Route path="leads/history" element={<SearchHistory />} />
+        <Route path="login" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Route>
+    </Routes>
+  );
 }
 
 export default function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          
-          <Route path="/" element={
-            <ProtectedRoute>
-              <DashboardLayout />
-            </ProtectedRoute>
-          }>
-            <Route index element={<Dashboard />} />
-            <Route path="create" element={<CreateSite />} />
-            <Route path="sites" element={<SiteList />} />
-            <Route path="settings" element={<SettingsPage />} />
-            <Route path="api-docs" element={<ApiDocs />} />
-            <Route path="users" element={<UsersPage />} />
-            <Route path="templates" element={<TemplatesPage />} />
-            <Route path="profile" element={<ProfilePage />} />
-            <Route path="leads" element={<LeadGenerator />} />
-            <Route path="leads/history" element={<SearchHistory />} />
-          </Route>
-        </Routes>
+        <PublicApplication />
       </BrowserRouter>
     </AuthProvider>
   );
