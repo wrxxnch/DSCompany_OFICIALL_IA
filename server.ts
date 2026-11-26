@@ -1,21 +1,12 @@
+import 'dotenv/config';
 import express from 'express';
 console.log('Server starting...');
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import cors from 'cors';
-import jwt from 'jsonwebtoken';
-import bcrypt from 'bcryptjs';
 import db from './src/db.js';
 import fs from 'fs';
-import crypto from 'crypto';
-import { exec } from 'child_process';
-import { GoogleGenAI, Type } from '@google/genai';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-change-in-prod';
-
-// User existence cache to reduce DB load
-const userCache = new Map<string | number, { timestamp: number; exists: boolean; role?: string; sector?: string }>();
-const USER_CACHE_TTL = 60 * 1000; // 1 minute
+import { GoogleGenAI } from '@google/genai';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -30,251 +21,37 @@ if (!fs.existsSync(dadosDir)) {
   fs.mkdirSync(dadosDir, { recursive: true });
 }
 
-// Initialize default admin if not exists, or update if it does
-async function initAdmin() {
-  try {
-    const results = await db.sql`SELECT id FROM users WHERE LOWER(username) = LOWER('DuJao')`;
-    const adminExists = results[0];
-    const hash = bcrypt.hashSync('3003', 10);
-    if (!adminExists) {
-      await db.sql`INSERT INTO users (username, password_hash, role) VALUES ('DuJao', ${hash}, 'admin')`;
-    } else {
-      await db.sql`UPDATE users SET password_hash = ${hash}, role = 'admin' WHERE LOWER(username) = LOWER('DuJao')`;
-    }
-  } catch (error) {
-    console.error('Error initializing admin:', error);
-  }
-}
-initAdmin();
-
 // --- API Routes ---
 
-// PUBLIC MODE: all routes using this middleware are open to anyone who can reach the app.
-// This intentionally replaces JWT checks at the user's request; do not deploy with private data.
+// Public mode: no account is loaded, created, or authenticated.
 const authenticateToken = async (req: any, res: any, next: any) => {
-  try {
-    let results = await db.sql`SELECT id, username, role, api_key, daily_goal, sector, gemini_api_key, sales_message_template, can_use_ai_search FROM users WHERE LOWER(username) = LOWER('DuJao') LIMIT 1`;
-    if (!results[0]) {
-      await initAdmin();
-      results = await db.sql`SELECT id, username, role, api_key, daily_goal, sector, gemini_api_key, sales_message_template, can_use_ai_search FROM users WHERE LOWER(username) = LOWER('DuJao') LIMIT 1`;
-    }
-    const publicUser = results[0];
-    if (!publicUser) return res.status(503).json({ error: 'Usuário operacional padrão ainda não foi inicializado.' });
-    req.user = { ...publicUser, role: 'admin', sector: publicUser.sector || 'Produção' };
-    return next();
-  } catch (error) {
-    console.error('Public access middleware error:', error);
-    return res.status(500).json({ error: 'Erro ao inicializar acesso público' });
-  }
+  req.user = { id: 0, username: 'Painel público', role: 'admin', sector: 'Produção' };
+  return next();
 };
-
-// Login is intentionally disabled while this instance runs in public mode.
-app.post('/api/auth/login', (_req, res) => {
-  res.status(410).json({ error: 'Login desativado: o painel está configurado para acesso público.' });
-});
-
-// Change password
-app.post('/api/auth/change-password', authenticateToken, async (req: any, res) => {
-  try {
-    const { currentPassword, newPassword } = req.body;
-    if (!currentPassword || !newPassword) {
-      return res.status(400).json({ error: 'Senhas atual e nova são obrigatórias' });
-    }
-
-    const results = await db.sql`SELECT password_hash FROM users WHERE id = ${req.user.id}`;
-    const user = results[0];
-
-    if (!user || !bcrypt.compareSync(currentPassword, user.password_hash)) {
-      return res.status(401).json({ error: 'Senha atual incorreta' });
-    }
-
-    const newHash = bcrypt.hashSync(newPassword, 10);
-    await db.sql`UPDATE users SET password_hash = ${newHash} WHERE id = ${req.user.id}`;
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Change password error:', error);
-    res.status(500).json({ error: 'Erro interno no servidor' });
-  }
-});
 
 // Get current user
 app.get('/api/auth/me', authenticateToken, async (req: any, res) => {
+  res.json({ id: 0, username: 'Painel público', role: 'admin', sector: 'Produção' });
+});
+
+// Get settings: only non-secret operational values are exposed.
+app.get('/api/settings', authenticateToken, async (_req: any, res: any) => {
   try {
-    const results = await db.sql`SELECT id, username, role, api_key, daily_goal, sector, gemini_api_key, sales_message_template, can_use_ai_search FROM users WHERE id = ${req.user.id}`;
-    const user = results[0];
-    res.json(user);
+    const settings = await db.sql`SELECT key, value FROM settings WHERE key = 'default_endpoint'`;
+    res.json(Object.fromEntries(settings.map((item: any) => [item.key, item.value])));
   } catch (error) {
-    console.error('Me error:', error);
-    res.status(500).json({ error: 'Erro interno no servidor' });
+    console.error('Settings error:', error);
+    res.status(500).json({ error: 'Erro interno ao buscar configurações' });
   }
 });
 
-// Get settings
-app.get('/api/settings', authenticateToken, async (req: any, res) => {
+// AI keys are server-only; this endpoint stores only the optional webhook destination.
+app.post('/api/settings', authenticateToken, async (req: any, res: any) => {
+  const { default_endpoint } = req.body;
   try {
-    const settings = await db.sql`SELECT key, value FROM settings`;
-    const settingsMap = settings.reduce((acc: any, curr: any) => {
-      acc[curr.key] = curr.value;
-      return acc;
-    }, {});
-
-    // If regular user, override gemini_api_key with their own key if it exists
-    const userRes = await db.sql`SELECT gemini_api_key, sales_message_template, sector FROM users WHERE id = ${req.user.id}`;
-    const userData = userRes[0] || {};
-
-    if (req.user.role !== 'admin' && userData.sector !== 'Produção') {
-      if (userData.gemini_api_key) {
-        settingsMap.gemini_api_key = userData.gemini_api_key;
-      } else if (!settingsMap.gemini_api_key) {
-        settingsMap.gemini_api_key = ''; 
-      }
-      // Note: If settingsMap.gemini_api_key was already set from the settings table, 
-      // and the user has no personal key, we keep the global one.
-      
-      // Hide default_endpoint from regular users not in Produção
-      delete settingsMap.default_endpoint;
-    } else if (userData.gemini_api_key) {
-      // If they have a personal key, use it even if they are admin or Produção
-      settingsMap.gemini_api_key = userData.gemini_api_key;
-    }
-
-    settingsMap.sales_message_template = userData.sales_message_template || '';
-
-    res.json(settingsMap);
-  } catch (error) {
-    console.error('Settings error details:', error);
-    res.status(500).json({ error: 'Erro interno no servidor ao buscar configurações' });
-  }
-});
-
-// Users Management
-app.get('/api/users', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Acesso negado' });
-  }
-  try {
-    const users = await db.sql`SELECT id, username, role, api_key, daily_goal, sector, can_use_ai_search FROM users`;
-    res.json(users);
-  } catch (error) {
-    console.error('Users fetch error:', error);
-    res.status(500).json({ error: 'Erro interno no servidor' });
-  }
-});
-
-app.post('/api/users', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Acesso negado' });
-  }
-  const { username, password, role, daily_goal, sector, can_use_ai_search } = req.body;
-  if (!username || !password || !role) {
-    return res.status(400).json({ error: 'Todos os campos são obrigatórios' });
-  }
-  
-  try {
-    const existingResults = await db.sql`SELECT id FROM users WHERE LOWER(username) = LOWER(${username})`;
-    if (existingResults[0]) {
-      return res.status(400).json({ error: 'Usuário já existe' });
-    }
-
-    const hash = bcrypt.hashSync(password, 10);
-    const apiKey = crypto.randomBytes(24).toString('hex');
-    const goal = parseInt(daily_goal) || 0;
-    const sectorStr = String(sector || '');
-    const canUseAi = can_use_ai_search ? 1 : 0;
-    
-    await db.sql`INSERT INTO users (username, password_hash, role, api_key, daily_goal, sector, can_use_ai_search) VALUES (${username}, ${hash}, ${role}, ${apiKey}, ${goal}, ${sectorStr}, ${canUseAi})`;
-    
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Error creating user:', error);
-    res.status(500).json({ error: 'Erro ao criar usuário' });
-  }
-});
-
-app.patch('/api/users/:id', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Acesso negado' });
-  }
-  const { daily_goal, sector, role, can_use_ai_search } = req.body;
-  
-  try {
-    if (daily_goal !== undefined) {
-      await db.sql`UPDATE users SET daily_goal = ${parseInt(daily_goal) || 0} WHERE id = ${req.params.id}`;
-    }
-    if (sector !== undefined) {
-      await db.sql`UPDATE users SET sector = ${String(sector || '')} WHERE id = ${req.params.id}`;
-    }
-    if (role !== undefined) {
-      await db.sql`UPDATE users SET role = ${String(role)} WHERE id = ${req.params.id}`;
-    }
-    if (can_use_ai_search !== undefined) {
-      await db.sql`UPDATE users SET can_use_ai_search = ${can_use_ai_search ? 1 : 0} WHERE id = ${req.params.id}`;
-    }
-    
-    // Clear cache for this user
-    userCache.delete(parseInt(req.params.id));
-    
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Error updating user:', error);
-    res.status(500).json({ error: 'Erro ao atualizar usuário' });
-  }
-});
-
-app.delete('/api/users/:id', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Acesso negado' });
-  }
-  if (Number(req.params.id) === Number(req.user.id)) {
-    return res.status(400).json({ error: 'Não é possível excluir o próprio usuário' });
-  }
-  
-  try {
-    const userId = parseInt(req.params.id);
-    await db.sql`DELETE FROM users WHERE id = ${userId}`;
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Error deleting user:', error);
-    res.status(500).json({ error: 'Erro ao excluir usuário' });
-  }
-});
-
-// Save settings
-app.post('/api/settings', authenticateToken, async (req: any, res) => {
-  const { gemini_api_key, default_endpoint, sales_message_template } = req.body;
-  
-  try {
-    if (req.user.role !== 'admin') {
-      // Regular user can only update their own gemini_api_key and sales_message_template
-      if (gemini_api_key !== undefined) {
-        await db.sql`UPDATE users SET gemini_api_key = ${gemini_api_key} WHERE id = ${req.user.id}`;
-      }
-      if (sales_message_template !== undefined) {
-        await db.sql`UPDATE users SET sales_message_template = ${sales_message_template} WHERE id = ${req.user.id}`;
-      }
-      return res.json({ success: true });
-    }
-
-    // Admin logic
-    if (gemini_api_key !== undefined) {
-      await db.sql`INSERT INTO settings (key, value) VALUES ('gemini_api_key', ${gemini_api_key}) ON CONFLICT(key) DO UPDATE SET value = excluded.value`;
-      // Also update admin's personal key to keep it in sync or clear it
-      await db.sql`UPDATE users SET gemini_api_key = ${gemini_api_key} WHERE id = ${req.user.id}`;
-      
-      // Reset usage when key changes
-      const today = new Date().toISOString().split('T')[0];
-      await db.sql`INSERT INTO settings (key, value) VALUES ('gemini_usage_date', ${today}) ON CONFLICT(key) DO UPDATE SET value = excluded.value`;
-      await db.sql`INSERT INTO settings (key, value) VALUES ('gemini_usage_count', '0') ON CONFLICT(key) DO UPDATE SET value = excluded.value`;
-    }
-    
     if (default_endpoint !== undefined) {
       await db.sql`INSERT INTO settings (key, value) VALUES ('default_endpoint', ${default_endpoint}) ON CONFLICT(key) DO UPDATE SET value = excluded.value`;
     }
-
-    if (sales_message_template !== undefined) {
-      await db.sql`UPDATE users SET sales_message_template = ${sales_message_template} WHERE id = ${req.user.id}`;
-    }
-    
     res.json({ success: true });
   } catch (error) {
     console.error('Error saving settings:', error);
@@ -328,50 +105,6 @@ app.post('/api/gemini-usage/increment', authenticateToken, async (req: any, res)
   } catch (error) {
     console.error('Error incrementing gemini usage:', error);
     res.status(500).json({ error: 'Erro ao incrementar uso da API' });
-  }
-});
-
-// Dashboard Stats
-app.get('/api/stats', authenticateToken, async (req: any, res) => {
-  try {
-    const userRes = await db.sql`SELECT sector, role FROM users WHERE id = ${req.user.id}`;
-    const user = userRes[0];
-
-    let totalQuery = "SELECT COUNT(*) as count FROM sites";
-    let todayQuery = "SELECT COUNT(*) as count FROM sites WHERE date(created_at) = date('now')";
-    
-    if (user.role !== 'admin') {
-      if (user.sector === 'Vendas') {
-        totalQuery += " WHERE status = 'produzido'";
-        todayQuery += " AND status = 'produzido'";
-      } else if (user.sector === 'Produção') {
-        totalQuery += " WHERE status = 'prospectado'";
-        todayQuery += " AND status = 'prospectado'";
-      } else if (user.sector === 'Prospecção') {
-        totalQuery += " WHERE user_id = " + req.user.id;
-        todayQuery += " AND user_id = " + req.user.id;
-      }
-    }
-
-    const totalResults = await db.sql(totalQuery);
-    const todayResults = await db.sql(todayQuery);
-    
-    // Get user progress
-    const userProgressResults = await db.sql`SELECT COUNT(*) as count FROM sites WHERE user_id = ${req.user.id} AND date(created_at) = date('now')`;
-    const userGoalResults = await db.sql`SELECT daily_goal FROM users WHERE id = ${req.user.id}`;
-    
-    res.json({
-      total: totalResults[0].count,
-      today: todayResults[0].count,
-      userProgress: userProgressResults[0].count,
-      userGoal: userGoalResults[0]?.daily_goal || 0
-    });
-  } catch (error: any) {
-    console.error('Error in /api/stats:', error);
-    const message = error.message?.includes('Maximum number of allowed connections reached') 
-      ? 'O banco de dados está temporariamente sobrecarregado. Por favor, tente novamente em alguns instantes.'
-      : 'Erro interno ao carregar estatísticas';
-    res.status(500).json({ error: message });
   }
 });
 
@@ -458,7 +191,7 @@ app.post('/api/analyze/save', authenticateToken, async (req: any, res) => {
 
     const result = await db.sql`
       INSERT INTO sites (slug, name, phone, address, city, description, services, map_link, image_url, expires_at, user_id, status, full_data)
-      VALUES (${filename}, ${nameStr}, ${phoneStr}, ${addressStr}, ${cityStr}, ${descriptionStr}, ${servicesStr}, ${mapLinkStr}, ${imageUrlStr}, ${expiresAt.toISOString()}, ${req.user.id}, 'prospectado', ${JSON.stringify(data)})
+      VALUES (${filename}, ${nameStr}, ${phoneStr}, ${addressStr}, ${cityStr}, ${descriptionStr}, ${servicesStr}, ${mapLinkStr}, ${imageUrlStr}, ${expiresAt.toISOString()}, ${null}, 'prospectado', ${JSON.stringify(data)})
     `;
 
     res.json({ id: result.lastID, filename });
@@ -501,7 +234,7 @@ app.post('/api/analyze/bulk-save', authenticateToken, async (req: any, res) => {
 
       const result = await db.sql`
         INSERT INTO sites (slug, name, phone, address, city, description, services, map_link, image_url, expires_at, user_id, status, full_data)
-        VALUES (${filename}, ${nameStr}, ${phoneStr}, ${addressStr}, ${cityStr}, ${descriptionStr}, ${servicesStr}, ${mapLinkStr}, ${imageUrlStr}, ${expiresAt.toISOString()}, ${req.user.id}, 'prospectado', ${JSON.stringify(lead)})
+        VALUES (${filename}, ${nameStr}, ${phoneStr}, ${addressStr}, ${cityStr}, ${descriptionStr}, ${servicesStr}, ${mapLinkStr}, ${imageUrlStr}, ${expiresAt.toISOString()}, ${null}, 'prospectado', ${JSON.stringify(lead)})
       `;
       results.push({ id: result.lastID, name: lead.name });
     } catch (err: any) {
@@ -513,88 +246,23 @@ app.post('/api/analyze/bulk-save', authenticateToken, async (req: any, res) => {
   res.json({ success: true, results, errors });
 });
 
-// Save Search History
-app.post('/api/search-history', authenticateToken, async (req: any, res) => {
-  const { query, results_count, results_json } = req.body;
-  try {
-    await db.sql`
-      INSERT INTO search_history (user_id, query, results_count, results_json)
-      VALUES (${req.user.id}, ${query}, ${results_count}, ${JSON.stringify(results_json)})
-    `;
-    res.json({ success: true });
-  } catch (error: any) {
-    console.error('Error saving search history:', error);
-    res.status(500).json({ error: 'Erro ao salvar histórico de busca' });
-  }
-});
-
-// List Search History
-app.get('/api/search-history', authenticateToken, async (req: any, res) => {
-  try {
-    const userRes = await db.sql`SELECT role FROM users WHERE id = ${req.user.id}`;
-    const user = userRes[0];
-    
-    let queryStr = `
-      SELECT sh.*, u.username 
-      FROM search_history sh 
-      JOIN users u ON sh.user_id = u.id
-    `;
-    
-    if (user.role !== 'admin') {
-      queryStr += ` WHERE sh.user_id = ${req.user.id}`;
-    }
-    
-    queryStr += ` ORDER BY sh.created_at DESC`;
-    
-    const history = await db.sql(queryStr);
-    res.json(history);
-  } catch (error: any) {
-    console.error('Error listing search history:', error);
-    res.status(500).json({ error: 'Erro ao listar histórico de busca' });
-  }
-});
-
 // List Analyzed Links
-app.get('/api/sites', authenticateToken, async (req: any, res) => {
+app.get('/api/sites', authenticateToken, async (_req: any, res: any) => {
   try {
-    const userRes = await db.sql`SELECT sector, role FROM users WHERE id = ${req.user.id}`;
-    const user = userRes[0];
-    
-    let query = `
-      SELECT s.*, u.username as creator_name, u.sector as creator_sector 
-      FROM sites s 
-      LEFT JOIN users u ON s.user_id = u.id 
-    `;
-    
-    let whereClauses = [];
-    
-    if (user.role !== 'admin') {
-      if (user.sector === 'Vendas') {
-        whereClauses.push("s.status IN ('vendas', 'produzido', 'contato', 'fechado', 'negado')");
-      } else if (user.sector === 'Produção') {
-        whereClauses.push("s.status IN ('prospectado', 'produção')");
-      } else if (user.sector === 'Prospecção') {
-        whereClauses.push("(s.status = 'prospectado' AND s.user_id = " + req.user.id + ")");
-      }
-    }
-    
-    if (whereClauses.length > 0) {
-      query += " WHERE " + whereClauses.join(" AND ");
-    }
-    
-    query += " ORDER BY s.created_at DESC";
-    
-    const sites = await db.sql(query);
+    const sites = await db.sql(`
+      SELECT s.*, u.username as creator_name, u.sector as creator_sector
+      FROM sites s LEFT JOIN users u ON s.user_id = u.id
+      ORDER BY s.created_at DESC
+    `);
     res.json(sites);
   } catch (error: any) {
     console.error('Error in /api/sites:', error);
-    const message = error.message?.includes('Maximum number of allowed connections reached') 
+    const message = error.message?.includes('Maximum number of allowed connections reached')
       ? 'O banco de dados está temporariamente sobrecarregado. Por favor, tente novamente em alguns instantes.'
       : 'Erro interno ao carregar sites';
     res.status(500).json({ error: message });
   }
 });
-
 // Download JSON
 app.get('/api/analyze/download/:filename', authenticateToken, async (req: any, res) => {
   const filename = req.params.filename;
@@ -741,41 +409,10 @@ app.post('/api/analyze-link', authenticateToken, async (req: any, res: any) => {
   }
 
   try {
-    // Get Gemini API Key
-    let geminiApiKey = '';
-    const settings = await db.sql`SELECT key, value FROM settings`;
-    const settingsMap = settings.reduce((acc: any, curr: any) => {
-      acc[curr.key] = curr.value;
-      return acc;
-    }, {} as any);
-
-    // If the request is authenticated, check if the user has a personal key
-    if (requestUser && requestUser.role !== 'admin' && requestUser.gemini_api_key) {
-      geminiApiKey = requestUser.gemini_api_key;
-      console.log("Using personal API key from user settings");
-    }
-
-    // Fallback to global settings if no personal key is set
-    if (!geminiApiKey && settingsMap.gemini_api_key) {
-      geminiApiKey = settingsMap.gemini_api_key;
-      console.log("Using API key from database settings");
-    }
-
+    const geminiApiKey = process.env.GEMINI_API_KEY?.trim();
     if (!geminiApiKey) {
-      geminiApiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || '';
-      if (geminiApiKey) {
-        console.log("Using API key from environment variables");
-      }
+      return res.status(503).json({ error: 'Chave da IA não configurada. Defina GEMINI_API_KEY no ambiente do servidor.' });
     }
-
-    if (geminiApiKey) {
-      geminiApiKey = geminiApiKey.trim();
-    }
-
-    if (!geminiApiKey) {
-      return res.status(500).json({ error: 'Chave da API do Gemini não configurada. Por favor, configure na engrenagem.' });
-    }
-
     const ai = new GoogleGenAI({ apiKey: geminiApiKey });
     
     // Extract place name hint if possible
@@ -858,11 +495,11 @@ NÃO INVENTE DADOS. Se não souber ou não encontrar a empresa exata, retorne su
     
     let friendlyError = error.message || 'Erro interno ao analisar o link';
     if (friendlyError.includes('429') || friendlyError.includes('RESOURCE_EXHAUSTED') || friendlyError.includes('quota')) {
-      friendlyError = 'Limite de cota atingido (Erro 429). A ferramenta do Google Maps no Gemini tem limites diários. IMPORTANTE: Se você trocou a chave no Render, lembre-se de atualizá-la também no menu "Configurações" deste painel, pois a chave salva lá tem prioridade.';
+      friendlyError = 'Limite de cota atingido (Erro 429). A ferramenta de IA atingiu o limite de uso. Tente novamente mais tarde.';
     } else if (friendlyError.includes('503') || friendlyError.includes('UNAVAILABLE') || friendlyError.includes('high demand')) {
       friendlyError = 'Os servidores da Inteligência Artificial estão sobrecarregados no momento (Erro 503). Isso é temporário. Por favor, aguarde alguns instantes e tente novamente.';
     } else if (friendlyError.includes('API_KEY_INVALID') || friendlyError.includes('invalid API key')) {
-      friendlyError = 'Chave de API inválida. Por favor, verifique a chave configurada nas Configurações.';
+      friendlyError = 'Chave de API inválida. Verifique GEMINI_API_KEY no ambiente do servidor.';
     }
 
     return res.status(500).json({ error: friendlyError, details: error.message });
@@ -875,43 +512,8 @@ app.patch('/api/sites/:id/status', authenticateToken, async (req: any, res: any)
   const { status, hosting_url } = req.body;
   
   try {
-    const userRes = await db.sql`SELECT sector, role FROM users WHERE id = ${req.user.id}`;
-    const user = userRes[0];
-    
     const siteRes = await db.sql`SELECT status, user_id FROM sites WHERE id = ${id}`;
     if (siteRes.length === 0) return res.status(404).json({ error: 'Site não encontrado' });
-    const currentSite = siteRes[0];
-
-    // Enforce sequential flow and sector restrictions
-    if (user.role !== 'admin') {
-      if (user.sector === 'Produção') {
-        // Produção can move from prospectado to produção, or from produção to produzido
-        if (currentSite.status === 'prospectado') {
-          if (status !== 'produção') {
-            return res.status(400).json({ error: 'Produção só pode mover de prospectado para produção' });
-          }
-        } else if (currentSite.status === 'produção') {
-          if (status !== 'produzido') {
-            return res.status(400).json({ error: 'Produção só pode mover de produção para produzido' });
-          }
-          if (!hosting_url) {
-            return res.status(400).json({ error: 'Link de hospedagem é obrigatório para finalizar a produção' });
-          }
-        } else {
-          return res.status(403).json({ error: 'Produção só pode alterar sites com status prospectado ou produção' });
-        }
-      } else if (user.sector === 'Vendas') {
-        if (currentSite.status !== 'produzido') {
-          return res.status(403).json({ error: 'Vendas só pode alterar sites com status produzido' });
-        }
-        if (status !== 'fechado') {
-          return res.status(400).json({ error: 'Vendas só pode mover para fechado' });
-        }
-      } else if (user.sector === 'Prospecção') {
-        return res.status(403).json({ error: 'Prospecção não pode alterar status' });
-      }
-    }
-
     let updates = [];
     let values = [];
 
@@ -963,34 +565,15 @@ app.delete('/api/sites/:id', authenticateToken, async (req: any, res) => {
 app.post('/api/sales/generate-message', authenticateToken, async (req: any, res: any) => {
   const { siteId } = req.body;
   if (!siteId) return res.status(400).json({ error: 'ID do site é obrigatório' });
-
   try {
-    const userRes = await db.sql`SELECT gemini_api_key, sector FROM users WHERE id = ${req.user.id}`;
-    const user = userRes[0];
-
-    if (user.sector !== 'Vendas' && req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Apenas setor de vendas pode gerar mensagens' });
-    }
-
     const siteRes = await db.sql`SELECT * FROM sites WHERE id = ${siteId}`;
     const site = siteRes[0];
     if (!site) return res.status(404).json({ error: 'Site não encontrado' });
 
-    // Get Gemini API Key
-    let geminiApiKey = user.gemini_api_key;
+    const geminiApiKey = process.env.GEMINI_API_KEY?.trim();
     if (!geminiApiKey) {
-      const settings = await db.sql`SELECT value FROM settings WHERE key = 'gemini_api_key'`;
-      geminiApiKey = settings[0]?.value;
+      return res.status(503).json({ error: 'Chave da IA não configurada. Defina GEMINI_API_KEY no ambiente do servidor.' });
     }
-
-    if (!geminiApiKey) {
-      geminiApiKey = process.env.GEMINI_API_KEY || '';
-    }
-
-    if (!geminiApiKey) {
-      return res.status(500).json({ error: 'Chave da API do Gemini não configurada.' });
-    }
-
     const ai = new GoogleGenAI({ apiKey: geminiApiKey });
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
@@ -1019,51 +602,6 @@ REGRAS:
   } catch (error: any) {
     console.error('Error generating sales message:', error);
     res.status(500).json({ error: 'Erro ao gerar mensagem: ' + (error.message || 'Erro desconhecido') });
-  }
-});
-
-// Generate database export files
-app.post('/api/admin/generate-export', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Acesso negado' });
-  }
-
-  try {
-    // Run both scripts sequentially
-    console.log('Starting manual database export generation...');
-    
-    exec('npx tsx scripts/export_db.ts && npx tsx scripts/generate_sqlite_file_pure_js.ts', (error, stdout, stderr) => {
-      if (error) {
-        console.error(`Export generation error: ${error.message}`);
-        return res.status(500).json({ error: 'Erro ao gerar arquivos de exportação' });
-      }
-      console.log(`Export generation output: ${stdout}`);
-      res.json({ success: true });
-    });
-  } catch (error) {
-    console.error('Error in generate-export route:', error);
-    res.status(500).json({ error: 'Erro interno ao processar exportação' });
-  }
-});
-
-// Download database export
-app.get('/api/admin/export-db', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Acesso negado' });
-  }
-
-  const format = req.query.format || 'json';
-  let fileName = 'database_export.json';
-  
-  if (format === 'sqlite') {
-    fileName = 'database_export.sqlite';
-  }
-
-  const filePath = path.join(process.cwd(), fileName);
-  if (fs.existsSync(filePath)) {
-    res.download(filePath, fileName);
-  } else {
-    res.status(404).json({ error: `Arquivo de exportação (${format}) não encontrado. Por favor, gere o arquivo primeiro.` });
   }
 });
 

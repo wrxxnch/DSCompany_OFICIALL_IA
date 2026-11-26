@@ -1,7 +1,7 @@
 import { Database } from '@sqlitecloud/drivers';
-import crypto from 'crypto';
+import 'dotenv/config';
 
-const SQLITE_CLOUD_URL = process.env.SQLITE_CLOUD_URL || 'sqlitecloud://ct9xsnnpvz.g1.sqlite.cloud:8860/DsCompany_com_IA.db?apikey=c9lGTn4sb98t3kl3w2gU8cMXQiKDavSd7QF3vTwHV9Q';
+const SQLITE_CLOUD_URL = process.env.SQLITE_CLOUD_URL || '';
 
 class DBWrapper {
   private db: any;
@@ -9,6 +9,7 @@ class DBWrapper {
 
   constructor() {
     try {
+      if (!SQLITE_CLOUD_URL) throw new Error('Configure SQLITE_CLOUD_URL no ambiente do servidor.');
       console.log('Connecting to SQLiteCloud...');
       this.db = new Database(SQLITE_CLOUD_URL);
       console.log('Connected to SQLiteCloud.');
@@ -257,13 +258,6 @@ ${instagramCTA}
         await this.db.sql(`INSERT INTO templates (name, prompt_template, flow_structure) VALUES (?, ?, ?)`, 'Modelo Moderno Tech', defaultPrompt.replace('rústico', 'moderno'), defaultFlow);
       }
 
-      // Generate API keys for users that don't have one
-      const usersWithoutApiKey: any = await this.db.sql(`SELECT id FROM users WHERE api_key IS NULL`);
-      for (const user of usersWithoutApiKey) {
-        const apiKey = crypto.randomBytes(24).toString('hex');
-        await this.db.sql(`UPDATE users SET api_key = ? WHERE id = ?`, apiKey, user.id);
-      }
-      
       this.isInitialized = true;
       console.log('SQLiteCloud schema initialization complete.');
     } catch (error) {

@@ -11,7 +11,6 @@ import {
   Send,
   Terminal,
 } from "lucide-react";
-import { GoogleGenAI, Type } from "@google/genai";
 import { generatePrompt, generateFlowJson, fillTemplate } from "../utils/flowGenerator";
 
 export default function CreateSite() {
@@ -141,194 +140,31 @@ export default function CreateSite() {
     
     let extractedData: any = null;
     let finalUrl = mapsLink || "https://maps.google.com"; // Fallback for manual mode
-    const isUrl = finalUrl.startsWith('http://') || finalUrl.startsWith('https://');
+    const isUrl = inputMode === "auto" && (finalUrl.startsWith('http://') || finalUrl.startsWith('https://'));
 
     try {
-      // 1. Get API Key from settings or environment
-      addLog("Obtendo chave da API do Gemini...", "info");
-      let apiKey = "";
-
-      try {
-        const settingsRes = await fetch("/api/settings", {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-
-        if (settingsRes.status === 401 || settingsRes.status === 403) {
-          logout();
-          throw new Error("Sessão expirada. Por favor, faça login novamente.");
-        }
-
-        if (settingsRes.ok) {
-          const settings = await settingsRes.json();
-          if (settings.gemini_api_key) {
-            apiKey = settings.gemini_api_key.trim();
-            addLog(
-              "Chave da API obtida das configurações do banco.",
-              "success",
-            );
-          }
-        }
-      } catch (e) {
-        console.error("Error fetching settings:", e);
-      }
-
-      if (!apiKey) {
-        // Fallback to environment variable
-        apiKey =
-          import.meta.env.VITE_GEMINI_API_KEY ||
-          "";
-        if (apiKey) {
-          addLog("Chave da API obtida das variáveis de ambiente.", "success");
-        }
-      }
-
-      if (!apiKey) {
-        addLog("Chave da API do Gemini não configurada.", "error");
-        setError(
-          "Chave da API do Gemini não configurada. Por favor, configure-a na página de Configurações.",
-        );
-        setIsLoading(false);
-        return;
-      }
-
-      apiKey = apiKey.trim();
-
       if (inputMode === "auto") {
-        addLog("Iniciando análise do link...", "info");
-        // 2. Expand the URL if it's a short link
-        let placeNameHint = "";
-        if (isUrl) {
-          addLog("Verificando e expandindo URL...", "info");
-          try {
-            const expandRes = await fetch("/api/expand-url", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${token}`,
-              },
-              body: JSON.stringify({ url: mapsLink }),
-            });
-
-            if (expandRes.status === 401 || expandRes.status === 403) {
-              logout();
-              throw new Error("Sessão expirada. Por favor, faça login novamente.");
-            }
-
-            if (expandRes.ok) {
-              const expandData = await expandRes.json();
-              if (expandData.url) {
-                finalUrl = expandData.url;
-                addLog("URL expandida com sucesso.", "success");
-
-                // Try to extract place name from the expanded URL
-                const match = finalUrl.match(/\/place\/([^\/]+)/);
-                if (match && match[1]) {
-                  placeNameHint = decodeURIComponent(match[1].replace(/\+/g, " "));
-                  addLog(`Dica de nome encontrada: ${placeNameHint}`, "info");
-                }
-              }
-            }
-          } catch (e) {
-            console.warn("Failed to expand URL, using original", e);
-            addLog("Falha ao expandir URL, usando a original.", "info");
-          }
-        }
-
-        // 3. Analyze with AI
-        addLog("Iniciando extração de dados com IA (Gemini)...", "info");
-        const ai = new GoogleGenAI({ apiKey: apiKey });
-        
-        const inputContext = isUrl 
-          ? `Você recebeu o seguinte link do Google Maps: ${finalUrl}\n${placeNameHint ? `Dica: O nome do estabelecimento extraído da URL parece ser "${placeNameHint}".` : ""}`
-          : `Você recebeu as seguintes informações sobre a empresa:\n"${finalUrl}"`;
-
-        const response = await ai.models.generateContent({
-          model: "gemini-3-flash-preview",
-          contents: `Você é um especialista em extração de dados.
-${inputContext}
-
-Sua missão é OBRIGATÓRIA:
-1. Analise cuidadosamente as informações fornecidas para identificar o estabelecimento.
-2. Descubra EXATAMENTE qual é o estabelecimento real (nome, nicho, endereço, telefone).
-3. Se a entrada for muito genérica, sem sentido, ou se você NÃO TIVER 100% DE CERTEZA de qual é o estabelecimento exato, você DEVE definir "success" como false e preencher o "errorMessage" explicando que não foi possível identificar o local.
-4. Se você encontrou o estabelecimento com sucesso, defina "success" as true e extraia os dados reais: Nome da empresa, telefone (apenas números com DDD), endereço completo e cidade.
-5. Identifique o NICHO exato (ex: barbearia, lanchonete, clínica, restaurante).
-6. Crie uma DESCRIÇÃO detalhada do negócio.
-7. Liste os principais serviços oferecidos (ou que fazem sentido para o nicho), separados por vírgula.
-
-RETORNE OS DADOS EM UM BLOCO DE CÓDIGO JSON com a seguinte estrutura exata:
-\`\`\`json
-{
-  "success": true/false,
-  "errorMessage": "mensagem de erro se success for false",
-  "name": "Nome da Empresa",
-  "phone": "Telefone",
-  "address": "Endereço Completo",
-  "city": "Cidade",
-  "description": "Descrição",
-  "services": "Serviços",
-  "niche": "Nicho"
-}
-\`\`\`
-
-NÃO INVENTE DADOS. Se não souber ou não encontrar o local exato, retorne success: false.`,
-          config: {
-            tools: [{ googleMaps: {} }],
+        addLog("Analisando link com IA no servidor...", "info");
+        const analysisRes = await fetch("/api/analyze-link", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
           },
+          body: JSON.stringify({ url: finalUrl }),
         });
-
-        // Increment usage after successful call
-        try {
-          await fetch('/api/gemini-usage/increment', {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${token}` }
-          });
-          fetchGeminiUsage(); // Refresh usage display
-        } catch (e) {
-          console.error('Error incrementing usage:', e);
+        const analysisData = await analysisRes.json();
+        if (!analysisRes.ok) {
+          throw new Error(analysisData.error || "Não foi possível analisar o link.");
         }
-
-        let responseText = '{}';
-        try {
-          responseText = response.text || '{}';
-        } catch (e: any) {
-          console.error('Error getting response text:', e);
-          throw new Error('A resposta da IA foi bloqueada ou retornou vazia. Tente um link diferente.');
+        extractedData = analysisData;
+        if (!extractedData.success) {
+          addLog("A IA não conseguiu identificar a empresa.", "error");
+          setError(extractedData.errorMessage || "Não foi possível identificar a empresa a partir deste link.");
+          setIsLoading(false);
+          return;
         }
-
-        if (responseText) {
-          try {
-            // Extract JSON from code block if present
-            const jsonMatch = responseText.match(/```json\n([\s\S]*?)\n```/) || responseText.match(/```([\s\S]*?)```/);
-            const cleanText = jsonMatch ? jsonMatch[1] : responseText
-              .replace(/```json/gi, "")
-              .replace(/```/g, "")
-              .trim();
-            extractedData = JSON.parse(cleanText);
-            addLog("Dados extraídos e parseados com sucesso.", "success");
-          } catch (parseError) {
-            addLog("Falha ao fazer parse do JSON retornado pela IA.", "error");
-            console.error(
-              "JSON Parse Error:",
-              parseError,
-              "Raw text:",
-              responseText,
-            );
-            throw new Error(
-              "A resposta da IA não estava em um formato válido. Tente novamente.",
-            );
-          }
-
-          if (!extractedData.success) {
-            addLog("A IA não conseguiu identificar o estabelecimento.", "error");
-            setError(
-              extractedData.errorMessage ||
-                "Não foi possível identificar o estabelecimento a partir deste link. Por favor, verifique o link.",
-            );
-            setIsLoading(false);
-            return;
-          }
-        }
+        addLog("Dados extraídos com sucesso.", "success");
       } else {
         // Manual Mode
         addLog("Usando dados preenchidos manualmente...", "info");
@@ -396,7 +232,7 @@ NÃO INVENTE DADOS. Se não souber ou não encontrar o local exato, retorne succ
         addLog("Usando template padrão (fallback)", "info");
       }
 
-      const flowJson = generateFlowJson(promptText, extractedData.name, saveData.id, extractedData, flowStructure, apiKey);
+      const flowJson = generateFlowJson(promptText, extractedData.name, saveData.id, extractedData, flowStructure);
       addLog("JSON do Fluxo gerado com sucesso.", "success");
 
       let endpointSuccess = false;
@@ -802,7 +638,7 @@ NÃO INVENTE DADOS. Se não souber ou não encontrar o local exato, retorne succ
                 onClick={() => navigate("/sites")}
                 className="w-full sm:w-auto inline-flex items-center justify-center px-8 py-3 border border-zinc-200 text-base font-medium rounded-xl text-zinc-700 bg-white hover:bg-zinc-50 transition-colors"
               >
-                Ver Todas Análises
+                Ver sites já feitos
               </button>
               <button
                 onClick={() => {
@@ -811,7 +647,7 @@ NÃO INVENTE DADOS. Se não souber ou não encontrar o local exato, retorne succ
                 }}
                 className="w-full sm:w-auto inline-flex items-center justify-center px-8 py-3 text-base font-medium rounded-xl text-zinc-500 hover:text-zinc-700 transition-colors"
               >
-                Nova Análise
+                Nova prospecção
               </button>
             </div>
           </div>

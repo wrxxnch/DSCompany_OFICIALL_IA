@@ -130,7 +130,7 @@ export const generatePromptWithTemplate = (data: any, mapLink: string, template:
   return fillTemplate(template, data, mapLink);
 };
 
-export const generateFlowJson = (promptText: string, siteName: string = "DS Company", flowId?: string, inputData?: any, flowStructure?: string, apiKey?: string) => {
+export const generateFlowJson = (promptText: string, siteName: string = "DS Company", flowId?: string, inputData?: any, flowStructure?: string) => {
   const id = flowId || `flow-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
   
   if (flowStructure) {
@@ -150,8 +150,8 @@ export const generateFlowJson = (promptText: string, siteName: string = "DS Comp
         if (node.data?.label) {
           node.data.label = node.data.label.replace(/\{\{siteName\}\}/g, () => siteName);
         }
-        if (node.data?.config?.url && apiKey) {
-          node.data.config.url = node.data.config.url.replace(/\{YOUR_API_KEY\}/g, () => apiKey);
+        if (node.data?.config?.url) {
+          node.data.config.url = node.data.config.url.replace(/([?&]key=)[^&]*/gi, '$1{YOUR_API_KEY}');
         }
         return node;
       };
@@ -205,7 +205,7 @@ export const generateFlowJson = (promptText: string, siteName: string = "DS Comp
           "type": "httpRequest",
           "status": "SUCCESS",
           "config": {
-            "url": `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey || '{YOUR_API_KEY}'}`,
+            "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={YOUR_API_KEY}",
             "method": "POST",
             "body": {
               "contents": [

@@ -20,7 +20,6 @@ import {
 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { generatePrompt, generateFlowJson, generatePromptWithTemplate } from "../utils/flowGenerator";
-import { GoogleGenAI } from "@google/genai";
 
 export default function SiteList() {
   const { token, logout, user } = useAuth();
@@ -385,20 +384,6 @@ export default function SiteList() {
       const data = await res.json();
       addLog("Dados da análise obtidos com sucesso.", "success");
 
-      let apiKey = "";
-      try {
-        const settingsRes = await fetch('/api/settings', {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        if (settingsRes.ok) {
-          const settings = await settingsRes.json();
-          if (settings.gemini_api_key) {
-            apiKey = settings.gemini_api_key.trim();
-          }
-        }
-      } catch (e) {
-        console.error("Error fetching settings:", e);
-      }
 
       let finalPayload: any = null;
 
@@ -415,7 +400,6 @@ export default function SiteList() {
           endpointModal.site.id, 
           data,
           selectedTemplate?.flow_structure,
-          apiKey
         );
         setGeneratedFlowJson(finalPayload);
         addLog("JSON do Fluxo gerado com sucesso.", "success");
@@ -932,20 +916,6 @@ export default function SiteList() {
                         }
                         const data = await res.json();
 
-                        let apiKey = "";
-                        try {
-                          const settingsRes = await fetch('/api/settings', {
-                            headers: { Authorization: `Bearer ${token}` }
-                          });
-                          if (settingsRes.ok) {
-                            const settings = await settingsRes.json();
-                            if (settings.gemini_api_key) {
-                              apiKey = settings.gemini_api_key;
-                            }
-                          }
-                        } catch (e) {
-                          console.error("Error fetching settings:", e);
-                        }
 
                         const promptText = selectedTemplate 
                           ? generatePromptWithTemplate(data, endpointModal.site.map_link || "", selectedTemplate.prompt_template)
@@ -957,7 +927,6 @@ export default function SiteList() {
                           endpointModal.site.id, 
                           data,
                           selectedTemplate?.flow_structure,
-                          apiKey
                         );
                         
                         setGeneratedFlowJson(flowJson);
@@ -1281,13 +1250,13 @@ export default function SiteList() {
       )}
 
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <h1 className="text-2xl font-bold text-zinc-900">Análises Salvas</h1>
+        <h1 className="text-2xl font-bold text-zinc-900">Sites já feitos</h1>
         {(user?.role === 'admin' || user?.sector === 'Prospecção') && (
           <Link
             to="/create"
             className="inline-flex items-center justify-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700"
           >
-            Nova Análise
+            Nova prospecção
           </Link>
         )}
       </div>
