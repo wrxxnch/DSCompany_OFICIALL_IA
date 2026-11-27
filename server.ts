@@ -31,6 +31,11 @@ const authenticateToken = async (req: any, res: any, next: any) => {
   return next();
 };
 
+async function getGeminiApiKey(): Promise<string> {
+  const saved = await db.sql`SELECT value FROM settings WHERE key = 'gemini_api_key'`;
+  return String(saved[0]?.value || process.env.GEMINI_API_KEY || '').trim();
+}
+
 // Get current user
 app.get('/api/auth/me', authenticateToken, async (req: any, res) => {
   res.json({ id: 0, username: 'Painel público', role: 'admin', sector: 'Produção' });
@@ -95,9 +100,9 @@ app.delete('/api/users/:id', authenticateToken, async (req: any, res: any) => {
 app.post('/api/leads/search', authenticateToken, async (req: any, res: any) => {
   const query = String(req.body?.query || '').trim();
   if (!query) return res.status(400).json({ error: 'Descreva o tipo de empresa e a região.' });
-  const key = process.env.GEMINI_API_KEY?.trim();
-  if (!key) return res.status(503).json({ error: 'Configure GEMINI_API_KEY no ambiente privado do servidor.' });
   try {
+    const key = await getGeminiApiKey();
+    if (!key) return res.status(503).json({ error: 'Informe a chave Gemini em Configurações.' });
     const ai = new GoogleGenAI({ apiKey: key });
     const response = await ai.models.generateContent({ model: 'gemini-3-flash-preview', contents: `Encontre empresas reais no Google Maps que correspondam a: ${query}. Retorne apenas JSON com a forma {"leads":[{"name":"","city":"","address":"","phone":"","maps_link":"","niche":""}]}. Não invente contatos; inclua até 10 resultados.`, config: { tools: [{ googleMaps: {} }], responseMimeType: 'application/json' } });
     const data = JSON.parse((response.text || '{"leads":[]}').replace(/```json|```/g, '').trim());
@@ -109,7 +114,8 @@ app.post('/api/leads/search', authenticateToken, async (req: any, res: any) => {
 app.get('/api/settings', authenticateToken, async (_req: any, res: any) => {
   try {
     const settings = await db.sql`SELECT key, value FROM settings WHERE key IN ('default_endpoint', 'sales_message_template')`;
-    res.json(Object.fromEntries(settings.map((item: any) => [item.key, item.value])));
+    const keyRecord = await db.sql`SELECT value FROM settings WHERE key = 'gemini_api_key'`;
+    res.json({ ...Object.fromEntries(settings.map((item: any) => [item.key, item.value])), gemini_api_key_configured: Boolean(keyRecord[0]?.value || process.env.GEMINI_API_KEY) });
   } catch (error) {
     console.error('Settings error:', error);
     res.status(500).json({ error: 'Erro interno ao buscar configurações' });
@@ -118,14 +124,21 @@ app.get('/api/settings', authenticateToken, async (_req: any, res: any) => {
 
 // AI keys are server-only; this endpoint stores only the optional webhook destination.
 app.post('/api/settings', authenticateToken, async (req: any, res: any) => {
-  const { default_endpoint, sales_message_template } = req.body;
+  const { default_endpoint, sales_message_template, gemini_api_key, clear_gemini_api_key } = req.body || {};
   try {
+    if (typeof gemini_api_key === 'string' && gemini_api_key.trim() && (gemini_api_key.trim().length < 20 || gemini_api_key.trim().length > 500)) {
+      return res.status(400).json({ error: 'A chave Gemini parece inválida; verifique o valor informado.' });
+    }
     if (default_endpoint !== undefined) {
       await db.sql`INSERT INTO settings (key, value) VALUES ('default_endpoint', ${default_endpoint}) ON CONFLICT(key) DO UPDATE SET value = excluded.value`;
     }
     if (sales_message_template !== undefined) {
       await db.sql`INSERT INTO settings (key, value) VALUES ('sales_message_template', ${sales_message_template}) ON CONFLICT(key) DO UPDATE SET value = excluded.value`;
     }
+    if (typeof gemini_api_key === 'string' && gemini_api_key.trim()) {
+      await db.sql`INSERT INTO settings (key, value) VALUES ('gemini_api_key', ${gemini_api_key.trim()}) ON CONFLICT(key) DO UPDATE SET value = excluded.value`;
+    }
+    if (clear_gemini_api_key === true) await db.sql`DELETE FROM settings WHERE key = 'gemini_api_key'`;
     res.json({ success: true });
   } catch (error) {
     console.error('Error saving settings:', error);
@@ -233,10 +246,10 @@ app.delete('/api/templates/:id', authenticateToken, async (req: any, res) => {
 
 app.post('/api/templates/generate', authenticateToken, async (req: any, res: any) => {
   const idea = String(req.body?.idea || '').trim();
-  const key = process.env.GEMINI_API_KEY?.trim();
   if (!idea) return res.status(400).json({ error: 'Descreva o template desejado.' });
-  if (!key) return res.status(503).json({ error: 'Configure GEMINI_API_KEY no ambiente privado do servidor.' });
   try {
+    const key = await getGeminiApiKey();
+    if (!key) return res.status(503).json({ error: 'Informe a chave Gemini em Configurações.' });
     const ai = new GoogleGenAI({ apiKey: key });
     const response = await ai.models.generateContent({ model: 'gemini-3-flash-preview', contents: `Crie um template de prospecção de site baseado em: ${idea}. Retorne JSON puro com name, prompt_template e flow_structure; flow_structure deve ser JSON com nodes e edges, usando placeholders {{prompt}} e {{siteName}}.`, config: { responseMimeType: 'application/json' } });
     const data = JSON.parse((response.text || '{}').replace(/```json|```/g, '').trim());
@@ -499,9 +512,9 @@ app.post('/api/analyze-link', authenticateToken, async (req: any, res: any) => {
   }
 
   try {
-    const geminiApiKey = process.env.GEMINI_API_KEY?.trim();
+    const geminiApiKey = await getGeminiApiKey();
     if (!geminiApiKey) {
-      return res.status(503).json({ error: 'Chave da IA não configurada. Defina GEMINI_API_KEY no ambiente do servidor.' });
+      return res.status(503).json({ error: 'Informe a chave Gemini em Configurações.' });
     }
     const ai = new GoogleGenAI({ apiKey: geminiApiKey });
     
@@ -589,7 +602,7 @@ NÃO INVENTE DADOS. Se não souber ou não encontrar a empresa exata, retorne su
     } else if (friendlyError.includes('503') || friendlyError.includes('UNAVAILABLE') || friendlyError.includes('high demand')) {
       friendlyError = 'Os servidores da Inteligência Artificial estão sobrecarregados no momento (Erro 503). Isso é temporário. Por favor, aguarde alguns instantes e tente novamente.';
     } else if (friendlyError.includes('API_KEY_INVALID') || friendlyError.includes('invalid API key')) {
-      friendlyError = 'Chave de API inválida. Verifique GEMINI_API_KEY no ambiente do servidor.';
+      friendlyError = 'Chave de API inválida. Verifique a chave salva em Configurações.';
     }
 
     return res.status(500).json({ error: friendlyError, details: error.message });
@@ -660,9 +673,9 @@ app.post('/api/sales/generate-message', authenticateToken, async (req: any, res:
     const site = siteRes[0];
     if (!site) return res.status(404).json({ error: 'Site não encontrado' });
 
-    const geminiApiKey = process.env.GEMINI_API_KEY?.trim();
+    const geminiApiKey = await getGeminiApiKey();
     if (!geminiApiKey) {
-      return res.status(503).json({ error: 'Chave da IA não configurada. Defina GEMINI_API_KEY no ambiente do servidor.' });
+      return res.status(503).json({ error: 'Informe a chave Gemini em Configurações.' });
     }
     const ai = new GoogleGenAI({ apiKey: geminiApiKey });
     const response = await ai.models.generateContent({

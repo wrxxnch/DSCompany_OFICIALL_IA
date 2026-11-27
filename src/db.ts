@@ -1,33 +1,59 @@
 import { Database } from '@sqlitecloud/drivers';
 import 'dotenv/config';
+import { createRequire } from 'node:module';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const SQLITE_CLOUD_URL = process.env.SQLITE_CLOUD_URL || '';
 
 class DBWrapper {
   private db: any;
   private isInitialized: boolean = false;
+  private initialization: Promise<void> = Promise.resolve();
 
   constructor() {
     try {
-      if (!SQLITE_CLOUD_URL) throw new Error('Configure SQLITE_CLOUD_URL no ambiente do servidor.');
-      console.log('Connecting to SQLiteCloud...');
-      this.db = new Database(SQLITE_CLOUD_URL);
-      console.log('Connected to SQLiteCloud.');
-      this.initializeSchema();
+      if (SQLITE_CLOUD_URL) {
+        console.log('Connecting to SQLiteCloud...');
+        this.db = new Database(SQLITE_CLOUD_URL);
+        console.log('Connected to SQLiteCloud.');
+      } else {
+        const require = createRequire(import.meta.url);
+        const BetterSqlite3 = require('better-sqlite3');
+        const isVercel = process.env.VERCEL === '1' || Boolean(process.env.VERCEL_ENV);
+        const localPath = process.env.SQLITE_LOCAL_PATH || path.join(isVercel ? '/tmp' : process.cwd(), 'dados', 'dscompany.sqlite');
+        fs.mkdirSync(path.dirname(localPath), { recursive: true });
+        const local = new BetterSqlite3(localPath);
+        this.db = {
+          sql: async (strings: TemplateStringsArray | string, ...values: any[]) => {
+            const query = typeof strings === 'string'
+              ? strings
+              : Array.from(strings).reduce((sql, part, index) => sql + part + (index < values.length ? '?' : ''), '');
+            if (values.length === 0 && query.includes(';')) {
+              local.exec(query);
+              return [];
+            }
+            const statement = local.prepare(query);
+            if (statement.reader) return statement.all(...values);
+            const result = statement.run(...values);
+            return { lastID: Number(result.lastInsertRowid), changes: result.changes };
+          },
+          close: () => local.close(),
+        };
+        console.warn(`SQLITE_CLOUD_URL não configurada; usando SQLite local em ${localPath}.`);
+      }
+      this.initialization = this.initializeSchema();
     } catch (err) {
       console.error('Error connecting to SQLiteCloud:', err);
+      this.db = { sql: async () => { throw new Error(`Banco de dados indisponível: ${err instanceof Error ? err.message : String(err)}`); } };
     }
   }
 
   async sql(strings: TemplateStringsArray | string, ...values: any[]): Promise<any> {
     try {
-      if (typeof strings === 'string') {
-        // Handle raw string queries
-        return await this.db.sql(strings, ...values);
-      } else {
-        // Handle tagged template queries
-        return await this.db.sql(strings, ...values);
-      }
+      await this.initialization;
+      if (!this.db || typeof this.db.sql !== 'function') throw new Error('O banco ainda não foi inicializado.');
+      return await this.db.sql(strings, ...values);
     } catch (err: any) {
       console.error('SQLiteCloud Error:', err.message);
       throw err;
@@ -36,6 +62,7 @@ class DBWrapper {
 
   async close() {
     try {
+      await this.initialization;
       // SQLiteCloud driver might not have a close method or it might be different
       // but let's try if it exists
       if (this.db.close) await this.db.close();

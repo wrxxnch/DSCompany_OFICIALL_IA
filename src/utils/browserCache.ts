@@ -39,10 +39,12 @@ async function withStore<T>(mode: IDBTransactionMode, run: (store: IDBObjectStor
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE_NAME, mode);
     const request = run(transaction.objectStore(STORE_NAME));
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error || new Error('Falha no cache local.'));
-    transaction.oncomplete = () => db.close();
-    transaction.onerror = () => reject(transaction.error || new Error('Falha na transação do cache.'));
+    let result!: T;
+    request.onsuccess = () => { result = request.result; };
+    request.onerror = () => { db.close(); reject(request.error || new Error('Falha no cache local.')); };
+    transaction.oncomplete = () => { db.close(); resolve(result); };
+    transaction.onerror = () => { db.close(); reject(transaction.error || new Error('Falha na transação do cache.')); };
+    transaction.onabort = () => { db.close(); reject(transaction.error || new Error('A transação do cache foi cancelada.')); };
   });
 }
 
@@ -154,6 +156,7 @@ export function installBrowserApiCache(): void {
     const method = (init?.method || request?.method || 'GET').toUpperCase();
     const pathname = new URL(url).pathname;
     if (!pathname.startsWith(API_PREFIX)) return originalFetch(input, init);
+    if (method === 'GET' && pathname === '/api/settings') return originalFetch(input, init);
     if (method === 'GET') {
       try {
         const cached = await readCacheEntry(url);
