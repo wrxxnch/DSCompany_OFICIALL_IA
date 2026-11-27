@@ -5,6 +5,8 @@ interface User {
   username: string;
   role: string;
   sector?: string;
+  api_key?: string;
+  can_use_ai_search?: number;
 }
 
 interface AuthContextType {

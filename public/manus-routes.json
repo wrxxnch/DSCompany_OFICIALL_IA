@@ -1,0 +1,13 @@
+{
+  "routes": [
+    { "path": "/", "title": "Dashboard" },
+    { "path": "/create", "title": "Nova análise" },
+    { "path": "/leads", "title": "Gerador de leads" },
+    { "path": "/leads/history", "title": "Histórico de buscas" },
+    { "path": "/sites", "title": "Minhas análises" },
+    { "path": "/templates", "title": "Templates" },
+    { "path": "/settings", "title": "Configurações" },
+    { "path": "/api-docs", "title": "API externa" },
+    { "path": "/users", "title": "Usuários" }
+  ]
+}

@@ -1,10 +1,17 @@
 import React, { useState } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
-import { PlusCircle, List, Menu, X, Building2 } from 'lucide-react';
-
+import { PlusCircle, List, Menu, X, Building2, LayoutDashboard, Sparkles, History, Layout, Settings, Code, Users } from 'lucide-react';
+import BrowserCacheControls from '../components/BrowserCacheControls';
 const navigation = [
-  { name: 'Nova prospecção', href: '/create', icon: PlusCircle },
-  { name: 'Sites já feitos', href: '/sites', icon: List },
+  { name: 'Dashboard', href: '/', icon: LayoutDashboard },
+  { name: 'Nova análise', href: '/create', icon: PlusCircle },
+  { name: 'Gestor de leads', href: '/leads', icon: Sparkles },
+  { name: 'Histórico de buscas', href: '/leads/history', icon: History },
+  { name: 'Minhas análises', href: '/sites', icon: List },
+  { name: 'Templates', href: '/templates', icon: Layout },
+  { name: 'Configurações', href: '/settings', icon: Settings },
+  { name: 'API externa', href: '/api-docs', icon: Code },
+  { name: 'Usuários', href: '/users', icon: Users },
 ];
 
 export default function DashboardLayout() {
@@ -52,7 +59,10 @@ export default function DashboardLayout() {
         </div>
       )}
       <main className="min-h-screen pt-16 md:ml-64 md:pt-0">
-        <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 md:px-8">
+        <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 md:px-8">
+          <div className="mb-4 flex justify-end">
+            <BrowserCacheControls />
+          </div>
           <Outlet />
         </div>
       </main>

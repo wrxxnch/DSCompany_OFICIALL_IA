@@ -4,7 +4,7 @@
 
 # DS Company — Prospecções e sites feitos
 
-Painel público simplificado para criar prospecções de empresas e consultar os sites já salvos. Não há tela de login nem gerenciamento de usuários.
+Painel público sem login com Dashboard, Nova análise, Gerador de leads, Histórico de buscas, Minhas análises, Templates, Configurações, API externa e Usuários.
 
 ## Run Locally
 
@@ -22,10 +22,14 @@ Painel público simplificado para criar prospecções de empresas e consultar os
 4. Configure também `SQLITE_CLOUD_URL` com a URL privada do banco; a aplicação falha de forma explícita se ela estiver vazia.
 5. Inicie com `npm run dev`.
 
-## Public panel and n8n
+## Painel público e n8n
 
-O menu contém apenas “Nova prospecção” e “Sites já feitos”. As rotas de login e CRUD de usuários foram removidas. A tabela antiga de usuários é mantida sem migração destrutiva para preservar referências e dados existentes. Como o painel é público, as operações de prospecção e site podem ser acionadas por qualquer visitante; proteja o deployment e o banco. Consulte [SECURITY_PUBLIC_MODE.md](./SECURITY_PUBLIC_MODE.md).
+O painel continua deliberadamente público e sem autenticação, inclusive as rotas de gestão de usuários/templates; qualquer visitante pode consultar, criar, editar ou excluir dados. Proteja o deployment e o banco e não publique a URL sem aceitar esse risco. Consulte [SECURITY_PUBLIC_MODE.md](./SECURITY_PUBLIC_MODE.md).
 
-O workflow e as instruções do n8n estão em [n8n/README.md](./n8n/README.md). O cabeçalho `x-api-key` das integrações externas permanece compatível. Novas operações do painel não gravam a chave Gemini no banco nem no navegador; valores legados podem continuar no banco, mas não são usados nem devolvidos pela API. Os fluxos gerados mantêm o placeholder `{YOUR_API_KEY}`.
+O workflow e as instruções do n8n estão em [n8n/README.md](./n8n/README.md). A API externa aceita `x-api-key` quando `EXTERNAL_API_KEY` estiver definida no servidor; sem ela, segue pública. A Gemini é chamada pelo backend usando `GEMINI_API_KEY`, nunca pelo navegador. Configurações não secretas do painel são salvas no banco.
+
+## Cache do navegador e backup JSON
+
+Respostas de leitura (`GET /api/*`) são salvas em IndexedDB e servidas primeiro do cache local. Criar, editar ou excluir dados invalida os conjuntos afetados. O botão **Sincronizar** limpa o cache e volta a consultar o servidor. **Exportar JSON** baixa um backup somente do cache local do navegador; **Importar JSON** substitui somente o cache do navegador atual e não grava nem substitui dados no servidor. Os backups excluem propriedades comuns de segredo (senha, API key, token e similares); mantenha o arquivo exportado em local privado.
 
 O ZIP para download exclui deliberadamente `database_export.json`, um dump sensível que já está versionado no repositório. Não publique alterações sem antes decidir como removê-lo do repositório e tratar o histórico público.

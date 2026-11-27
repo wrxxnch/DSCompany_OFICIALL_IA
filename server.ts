@@ -7,6 +7,8 @@ import cors from 'cors';
 import db from './src/db.js';
 import fs from 'fs';
 import { GoogleGenAI } from '@google/genai';
+import bcrypt from 'bcryptjs';
+import { randomBytes } from 'crypto';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -34,10 +36,79 @@ app.get('/api/auth/me', authenticateToken, async (req: any, res) => {
   res.json({ id: 0, username: 'Painel público', role: 'admin', sector: 'Produção' });
 });
 
+// Restored public-panel APIs. This panel is intentionally unauthenticated per owner request.
+app.get('/api/stats', authenticateToken, async (_req: any, res: any) => {
+  try {
+    const total = await db.sql`SELECT COUNT(*) AS count FROM sites`;
+    const today = await db.sql`SELECT COUNT(*) AS count FROM sites WHERE date(created_at) = date('now')`;
+    res.json({ total: Number(total[0]?.count || 0), today: Number(today[0]?.count || 0), userProgress: Number(today[0]?.count || 0), userGoal: 0 });
+  } catch (error) { console.error('Stats error:', error); res.status(500).json({ error: 'Erro ao carregar estatísticas' }); }
+});
+
+app.get('/api/search-history', authenticateToken, async (_req: any, res: any) => {
+  try {
+    const rows = await db.sql`SELECT h.*, COALESCE(u.username, 'Painel público') AS username FROM search_history h LEFT JOIN users u ON h.user_id = u.id ORDER BY h.created_at DESC LIMIT 500`;
+    res.json(rows.map((row: any) => ({ ...row, results_json: typeof row.results_json === 'string' ? row.results_json : JSON.stringify(row.results_json || { leads: [] }) })));
+  } catch (error) { console.error('History error:', error); res.status(500).json({ error: 'Erro ao carregar histórico' }); }
+});
+
+app.post('/api/search-history', authenticateToken, async (req: any, res: any) => {
+  const { query, results_count = 0, results_json = {} } = req.body || {};
+  if (typeof query !== 'string' || !query.trim()) return res.status(400).json({ error: 'A busca é obrigatória' });
+  try {
+    const result = await db.sql`INSERT INTO search_history (user_id, query, results_count, results_json) VALUES (${null}, ${query.trim().slice(0, 500)}, ${Number(results_count) || 0}, ${JSON.stringify(results_json)})`;
+    res.json({ id: result.lastID, success: true });
+  } catch (error) { console.error('History save error:', error); res.status(500).json({ error: 'Erro ao salvar busca' }); }
+});
+
+app.get('/api/users', authenticateToken, async (_req: any, res: any) => {
+  try { res.json(await db.sql`SELECT id, username, role, api_key, daily_goal, sector, can_use_ai_search FROM users ORDER BY id`); }
+  catch (error) { console.error('Users error:', error); res.status(500).json({ error: 'Erro ao carregar usuários' }); }
+});
+
+app.post('/api/users', authenticateToken, async (req: any, res: any) => {
+  const { username, password, role = 'user', daily_goal = 0, sector = '', can_use_ai_search = 0 } = req.body || {};
+  if (typeof username !== 'string' || !username.trim() || typeof password !== 'string' || password.length < 5) return res.status(400).json({ error: 'Informe usuário e senha com pelo menos 5 caracteres.' });
+  try {
+    const hash = await bcrypt.hash(password, 10);
+    const apiKey = randomBytes(24).toString('hex');
+    await db.sql`INSERT INTO users (username, password_hash, role, api_key, daily_goal, sector, can_use_ai_search) VALUES (${username.trim()}, ${hash}, ${role === 'admin' ? 'admin' : 'user'}, ${apiKey}, ${Math.max(0, Number(daily_goal) || 0)}, ${String(sector || '')}, ${can_use_ai_search ? 1 : 0})`;
+    res.json({ success: true });
+  } catch (error: any) { console.error('User creation error:', error); res.status(500).json({ error: error.message?.includes('UNIQUE') ? 'Esse usuário já existe.' : 'Erro ao criar usuário' }); }
+});
+
+app.patch('/api/users/:id', authenticateToken, async (req: any, res: any) => {
+  const allowed: Record<string, string> = { daily_goal: 'daily_goal', sector: 'sector', can_use_ai_search: 'can_use_ai_search', role: 'role' };
+  try {
+    for (const [key, column] of Object.entries(allowed)) {
+      if (req.body?.[key] !== undefined) await db.sql(`UPDATE users SET ${column} = ? WHERE id = ?`, req.body[key], req.params.id);
+    }
+    res.json({ success: true });
+  } catch (error) { console.error('User update error:', error); res.status(500).json({ error: 'Erro ao atualizar usuário' }); }
+});
+
+app.delete('/api/users/:id', authenticateToken, async (req: any, res: any) => {
+  try { await db.sql`DELETE FROM users WHERE id = ${req.params.id}`; res.json({ success: true }); }
+  catch (error) { console.error('User deletion error:', error); res.status(500).json({ error: 'Erro ao excluir usuário' }); }
+});
+
+app.post('/api/leads/search', authenticateToken, async (req: any, res: any) => {
+  const query = String(req.body?.query || '').trim();
+  if (!query) return res.status(400).json({ error: 'Descreva o tipo de empresa e a região.' });
+  const key = process.env.GEMINI_API_KEY?.trim();
+  if (!key) return res.status(503).json({ error: 'Configure GEMINI_API_KEY no ambiente privado do servidor.' });
+  try {
+    const ai = new GoogleGenAI({ apiKey: key });
+    const response = await ai.models.generateContent({ model: 'gemini-3-flash-preview', contents: `Encontre empresas reais no Google Maps que correspondam a: ${query}. Retorne apenas JSON com a forma {"leads":[{"name":"","city":"","address":"","phone":"","maps_link":"","niche":""}]}. Não invente contatos; inclua até 10 resultados.`, config: { tools: [{ googleMaps: {} }], responseMimeType: 'application/json' } });
+    const data = JSON.parse((response.text || '{"leads":[]}').replace(/```json|```/g, '').trim());
+    res.json({ leads: Array.isArray(data.leads) ? data.leads : [] });
+  } catch (error: any) { console.error('Lead search error:', error); res.status(500).json({ error: 'Falha ao pesquisar leads. Verifique configuração e cota da IA.' }); }
+});
+
 // Get settings: only non-secret operational values are exposed.
 app.get('/api/settings', authenticateToken, async (_req: any, res: any) => {
   try {
-    const settings = await db.sql`SELECT key, value FROM settings WHERE key = 'default_endpoint'`;
+    const settings = await db.sql`SELECT key, value FROM settings WHERE key IN ('default_endpoint', 'sales_message_template')`;
     res.json(Object.fromEntries(settings.map((item: any) => [item.key, item.value])));
   } catch (error) {
     console.error('Settings error:', error);
@@ -47,10 +118,13 @@ app.get('/api/settings', authenticateToken, async (_req: any, res: any) => {
 
 // AI keys are server-only; this endpoint stores only the optional webhook destination.
 app.post('/api/settings', authenticateToken, async (req: any, res: any) => {
-  const { default_endpoint } = req.body;
+  const { default_endpoint, sales_message_template } = req.body;
   try {
     if (default_endpoint !== undefined) {
       await db.sql`INSERT INTO settings (key, value) VALUES ('default_endpoint', ${default_endpoint}) ON CONFLICT(key) DO UPDATE SET value = excluded.value`;
+    }
+    if (sales_message_template !== undefined) {
+      await db.sql`INSERT INTO settings (key, value) VALUES ('sales_message_template', ${sales_message_template}) ON CONFLICT(key) DO UPDATE SET value = excluded.value`;
     }
     res.json({ success: true });
   } catch (error) {
@@ -155,6 +229,20 @@ app.delete('/api/templates/:id', authenticateToken, async (req: any, res) => {
     console.error('Error deleting template:', error);
     res.status(500).json({ error: 'Erro ao excluir template' });
   }
+});
+
+app.post('/api/templates/generate', authenticateToken, async (req: any, res: any) => {
+  const idea = String(req.body?.idea || '').trim();
+  const key = process.env.GEMINI_API_KEY?.trim();
+  if (!idea) return res.status(400).json({ error: 'Descreva o template desejado.' });
+  if (!key) return res.status(503).json({ error: 'Configure GEMINI_API_KEY no ambiente privado do servidor.' });
+  try {
+    const ai = new GoogleGenAI({ apiKey: key });
+    const response = await ai.models.generateContent({ model: 'gemini-3-flash-preview', contents: `Crie um template de prospecção de site baseado em: ${idea}. Retorne JSON puro com name, prompt_template e flow_structure; flow_structure deve ser JSON com nodes e edges, usando placeholders {{prompt}} e {{siteName}}.`, config: { responseMimeType: 'application/json' } });
+    const data = JSON.parse((response.text || '{}').replace(/```json|```/g, '').trim());
+    if (typeof data.flow_structure !== 'string') data.flow_structure = JSON.stringify(data.flow_structure || { nodes: [], edges: [] }, null, 2);
+    res.json(data);
+  } catch (error: any) { console.error('Template generation error:', error); res.status(500).json({ error: 'Falha ao gerar template com IA.' }); }
 });
 
 // Save Analyzed Data
@@ -402,6 +490,8 @@ app.post('/api/proxy-webhook', authenticateToken, async (req: any, res: any) => 
 // Analyze Link Endpoint
 app.post('/api/analyze-link', authenticateToken, async (req: any, res: any) => {
   // This endpoint is public in the explicitly selected public-panel mode.
+  const externalKey = process.env.EXTERNAL_API_KEY?.trim();
+  if (externalKey && req.headers['x-api-key'] !== externalKey) return res.status(401).json({ error: 'x-api-key ausente ou inválida.' });
   const requestUser = req.user;
   const { url } = req.body;
   if (!url) {
